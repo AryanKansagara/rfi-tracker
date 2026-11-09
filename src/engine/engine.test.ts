@@ -80,6 +80,7 @@ test('format detection from header signatures', () => {
   assert.equal(detectFormat(['Spec Section', '#', 'Rev.', 'Title', 'Status', 'Submittal Manager', 'Ball In Court', 'Final Due Date']), 'procore-submittal')
   assert.equal(detectFormat(['ID', 'Title', 'Status', 'Ball in court', 'Due date', 'Created on', 'Assigned to']), 'acc-rfi')
   assert.equal(detectFormat(['Number', 'Title', 'Spec section', 'Status', 'Ball in court', 'Required on job date', 'Lead time']), 'acc-submittal')
+  assert.equal(detectFormat(['Number', 'Title', 'Status', 'Ball in court', 'Assigned to', 'Created on', 'Spec section']), 'acc-rfi', 'a spec column alone does not make it a submittal log')
   assert.equal(detectFormat(['task_code', 'task_name', 'target_start_date', 'target_end_date', 'total_float_hr_cnt']), 'p6')
   assert.equal(detectFormat(['ID', 'Name', 'Duration', 'Start', 'Finish', 'Total Slack', 'Critical']), 'msp')
   assert.equal(detectFormat(['RFI number', 'Changed on', 'Ball in court', 'Status']), 'history')

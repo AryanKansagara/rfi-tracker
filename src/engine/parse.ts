@@ -187,7 +187,7 @@ export function detectFormat(headers: string[]): Format {
   if (any('total_slack', 'unique_id') || (h.has('critical') && h.has('duration') && h.has('start'))) return 'msp'
   if (any('rfi_manager', 'received_from') && h.has('ball_in_court') && !any('spec_section', 'rev')) return 'procore-rfi'
   if (any('submittal_manager', 'responsible_contractor', 'final_due_date') && any('spec_section', 'rev')) return 'procore-submittal'
-  if (h.has('ball_in_court') && any('required_on_job_date', 'lead_time', 'submittal_type', 'spec_section') && !h.has('question')) return 'acc-submittal'
+  if (h.has('ball_in_court') && any('required_on_job_date', 'lead_time', 'submittal_type', 'revision', 'rev') && !h.has('question')) return 'acc-submittal'
   if (h.has('ball_in_court') && any('created_on', 'assigned_to', 'question', 'official_response', 'custom_identifier')) return 'acc-rfi'
   if (any('changed_on', 'changed_at', 'new_ball_in_court', 'event_date') || (headers.length <= 5 && any('to', 'ball_in_court') && h.has('date'))) return 'history'
   if (any('start', 'start_date', 'early_start', 'planned_start') && any('activity_id', 'activity_name', 'task', 'task_name', 'name', 'finish')) return 'generic-schedule'
