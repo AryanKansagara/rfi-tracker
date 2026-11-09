@@ -182,10 +182,13 @@ export function itemStates(ds: Dataset, cfg: Config): ItemState[] {
       inCourt: holder?.days ?? 0,
       overdue: dueLate > 0,
       daysLate: dueLate,
-      sched: item.open || linked ? scheduleCalc(item, linked, segs, cfg, cal, asOf) : undefined,
+      sched: closedThreat(item.open || linked ? scheduleCalc(item, linked, segs, cfg, cal, asOf) : undefined, item.open, asOf),
     }
   })
 }
+
+/** A closed item threatens nothing once its material is due on site already; keep its dates for the register. */
+const closedThreat = (c: ScheduleCalc | undefined, open: boolean, asOf: Day) => c && !open && c.forecast <= asOf ? { ...c, threat: null } : c
 
 // ---------- Rollups ----------
 
