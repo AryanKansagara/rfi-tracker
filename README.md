@@ -2,7 +2,7 @@
 
 RFI and submittal log intelligence for construction project managers and project engineers.
 
-**Live:** https://rfi-tracker.vercel.app
+**Live:** https://rfi-tracker-ebon.vercel.app
 
 ## The pain
 The RFI log tells you what is open. It does not tell you who has been sitting on it, whether that is past the review period in the contract, or which submittal is about to push the curtain wall install. PMs rebuild that picture in spreadsheets every week before the OAC meeting.
