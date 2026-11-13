@@ -20,6 +20,8 @@ interface Plan {
   gc: string; firms: Firm[]; specs: SpecSection[]; activities: Activity[]; holidays: Day[]
   rfiTopics: [string, string, string?][]      // title, reviewer firm, spec
   submittals: { spec: string; title: string; sub: string; reviewer: string; activity: string; lead: number; revs?: number; created?: string; sent?: string; stuck?: boolean }[]
+  repeats: Record<string, string[]>          // later RFIs to each firm: everyday questions, {loc} filled per item
+  locs: string[]
   start: string; rfiCount: number; seed: number
   stall: Role                                 // this party sits on a share of what it gets
 }
@@ -75,6 +77,13 @@ const MOB: Plan = {
     ['Tenant signage blocking at entry canopy', 'Cascade Health Partners'], ['Curtain wall mullion color match to sample', 'Kessler Ray Architects', '08 44 13'],
     ['Lighting control zones in waiting areas', 'Northline MEP Engineers', '26 51 00'], ['Deck penetrations for med gas risers', 'Brandt Structural Engineers', '05 31 00'],
   ],
+  repeats: {
+    'Kessler Ray Architects': ['Missing dimension at {loc}', 'Partition type conflict at {loc}', 'Finish clarification at {loc}', 'Door frame elevation at {loc}', 'Ceiling height at {loc}', 'Casework backing at {loc}'],
+    'Brandt Structural Engineers': ['Beam penetration for duct at {loc}', 'Embed plate detail at {loc}', 'Deck opening reinforcement at {loc}', 'Column base plate grout at {loc}'],
+    'Northline MEP Engineers': ['Duct vs beam clearance at {loc}', 'Sprinkler main elevation at {loc}', 'Light fixture type at {loc}', 'Receptacle heights at {loc}', 'Plumbing chase width at {loc}'],
+    'Cascade Health Partners': ['Owner finish selection for {loc}', 'Owner equipment rough-in at {loc}'],
+  },
+  locs: ['L2 corridor, grid C/3', 'L3 exam rooms east', 'L1 lobby', 'stair 2 landing L4', 'L5 mech room', 'grid E/7, L2', 'L4 nurse station', 'roof screen wall', 'L2 imaging suite', 'L3 clean utility', 'L1 loading dock'],
   submittals: [
     { spec: '08 44 13', title: 'Curtain wall shop drawings and calcs', sub: 'Apex Curtainwall', reviewer: 'Kessler Ray Architects', activity: 'A1310', lead: 70, revs: 2, created: '2026-07-20', sent: '2026-07-24', stuck: true },
     { spec: '08 44 13', title: 'Curtain wall finish samples', sub: 'Apex Curtainwall', reviewer: 'Kessler Ray Architects', activity: 'A1310', lead: 28, revs: 1, created: '2026-08-10' },
@@ -134,6 +143,12 @@ const SCHOOL: Plan = {
     ['Paint color schedule for corridors', 'Lincoln Unified School District', '09 91 23'], ['Restroom partition layout ADA clearances', 'Fieldhouse Studio Architects', '10 21 13'],
     ['PA speaker locations in gym', 'Tidewater Engineering', '27 51 16'], ['Phasing around summer school', 'Lincoln Unified School District'],
   ],
+  repeats: {
+    'Fieldhouse Studio Architects': ['Missing dimension at {loc}', 'Existing condition differs from drawings at {loc}', 'Finish clarification at {loc}'],
+    'Tidewater Engineering': ['Existing duct reuse at {loc}', 'Circuit tie-in at {loc}', 'Existing beam bearing at {loc}'],
+    'Lincoln Unified School District': ['Access to {loc} during school hours', 'Owner-furnished equipment at {loc}', 'Color selection for {loc}'],
+  },
+  locs: ['classroom 108', 'wing B corridor', 'gym east wall', 'science lab 214', 'cafeteria', 'restroom 120', 'library', 'main office', 'classroom 203'],
   submittals: [
     { spec: '08 51 13', title: 'Aluminum windows shop drawings', sub: 'Morrow Construction', reviewer: 'Fieldhouse Studio Architects', activity: 'S300', lead: 56, revs: 1, created: '2026-08-17' },
     { spec: '23 81 26', title: 'Split-system AC product data', sub: 'Keystone Mechanical', reviewer: 'Tidewater Engineering', activity: 'S350', lead: 42, created: '2026-09-08' },
@@ -175,7 +190,8 @@ export function generateSample(id: string): Dataset {
   const span = asOf - start
   for (let n = 1; n <= plan.rfiCount; n++) {
     const topic = n <= plan.rfiTopics.length ? plan.rfiTopics[n - 1] : pick(plan.rfiTopics)
-    const title = n <= plan.rfiTopics.length ? topic[0] : `${topic[0]} (follow-up ${Math.ceil(n / plan.rfiTopics.length) - 1})`
+    const rep = plan.repeats[topic[1]]
+    const title = n <= plan.rfiTopics.length ? topic[0] : rep[n % rep.length].replace('{loc}', plan.locs[(n * 7) % plan.locs.length])
     // More RFIs in the busy middle, a steady trickle in the last weeks.
     const created = cal.add(start + Math.floor(Math.pow(n / plan.rfiCount, 0.92) * (span - 3)), 0)
     const reviewer = firm(topic[1])

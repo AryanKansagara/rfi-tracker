@@ -411,6 +411,7 @@ tr.is-focus { background: var(--accent-soft) !important; }
 .lede-sm { font-size: 1.05rem; color: var(--ink-2); }
 .report-head { border-bottom: 3px solid var(--ink); margin-bottom: 18px; }
 .report table { width: 100%; }
+@media (max-width: 720px) { .report { padding: 20px 12px 40px; } .report table { display: block; overflow-x: auto; } }
 .report-group h3 { margin-top: 14px; }
 .report-foot { margin-top: 30px; }
 .pending { border-color: var(--ink); }
@@ -434,6 +435,7 @@ tr.is-focus { background: var(--accent-soft) !important; }
   .hero-inner { padding: 32px 16px 44px; }
 }
 .onboard { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .onboard { grid-template-columns: minmax(0, 1fr); } .onboard-card { padding: 20px; } }
 .onboard-card { border: 1px solid var(--line); border-radius: var(--r-2xl); padding: 28px; background: var(--surface); }
 .onboard-card.feature-card { background: var(--card); box-shadow: var(--shadow); }
 .sample-btn { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; text-align: left; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); color: var(--ink); cursor: pointer; font: inherit; transition: border-color .2s, box-shadow .2s, transform .2s var(--ease); }
