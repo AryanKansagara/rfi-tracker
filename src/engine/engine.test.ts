@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Calendar, constructionHolidays, fromIso, toIso, weekday } from './calendar.ts'
-import { attachHistory, autoMap, detectFormat, findHeaderRow, isClosedStatus, parseCsv, parseDate, parseLead, parseTable } from './parse.ts'
+import { Calendar, constructionHolidays, fromIso, holidaysForRegion, toIso, weekday } from './calendar.ts'
+import { readFileSync } from 'node:fs'
+import { attachHistory, autoMap, decodeText, detectFormat, findHeaderRow, firstParty, FORMATS, isClosedStatus, parseCsv, parseDate, parseLead, parseTable, readXer, sniffDayFirst } from './parse.ts'
 import { burnDown, compare, guessRole, itemStates, median, scorecards, segments, snapshot, summarize, timeByRole, DEFAULT_REVIEW_DAYS } from './analyze.ts'
 import { delayCsv, delayLog, oacReport, registerCsv, reminders } from './actions.ts'
 import { generateSample, sampleConfig, SAMPLES } from './sample.ts'
@@ -302,4 +303,98 @@ test('samples are labelled synthetic and tell the intended story', () => {
   const school = itemStates(generateSample('school'), sampleConfig('school'))
   assert.ok(school.every(s => !s.item.history), 'school sample exercises the dates-only path')
   assert.equal(scorecards(school)[0].role, 'Owner', 'the school district is the bottleneck')
+})
+
+// ---------- Real export layouts (fixtures in ./fixtures, invented values in the vendors' column layouts) ----------
+
+const fixture = (n: string) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url))
+const importFile = (name: string, text: string) => {
+  const t = /\.xer$/.test(name) ? readXer(text) : findHeaderRow(parseCsv(text))
+  const format = detectFormat(t.rows[0])
+  return { format, ...parseTable(t, autoMap(t.rows[0], FORMATS[format].kind), format) }
+}
+
+test('P6 XER: current project only, LOE and WBS summaries skipped, float in days of each calendar', () => {
+  const r = importFile('x.xer', decodeText(fixture('p6-mob-excerpt.xer')))
+  assert.equal(r.format, 'p6')
+  assert.deepEqual(r.issues, [])
+  assert.deepEqual(r.activities.map(a => a.id), ['A1050', 'A1310', 'A1300', 'A1400', 'A2000'], 'baseline copy of A1310 and LOE/WBS rows dropped')
+  const by = Object.fromEntries(r.activities.map(a => [a.id, a]))
+  assert.equal(toIso(by.A1050.start), '2026-07-06', 'completed: actual start')
+  assert.equal(toIso(by.A1050.finish!), '2026-10-02', 'completed: actual finish, not planned')
+  assert.equal(by.A1050.totalFloat, undefined)
+  assert.equal(by.A1050.critical, false)
+  assert.equal(toIso(by.A1310.start), '2026-12-14', 'not started: early start, not the planned date')
+  assert.equal(by.A1310.critical, true)
+  assert.equal(by.A1300.totalFloat, 8, '80 h on a 10 h/day calendar is 8 days, not 10')
+  assert.equal(by.A1300.critical, false)
+  assert.equal(by.A1300.name, 'Façade air barrier 07 27 26', 'Windows-1252 text decoded')
+  assert.equal(toIso(by.A1400.start), '2026-10-19', 'in progress: actual start')
+  assert.equal(by.A1400.totalFloat, -3)
+  assert.equal(by.A1400.critical, true, 'negative float is critical')
+})
+
+test('XER without a TASK table is rejected with a clear message', () => {
+  assert.throws(() => readXer('ERMHDR\t22.12\n%T\tPROJECT\n%F\tproj_id\n%R\t1\n%E\n'), /No TASK table/)
+})
+
+test('decodeText keeps UTF-8 and falls back to Windows-1252 for Excel CSVs', () => {
+  assert.equal(decodeText(new TextEncoder().encode('Café,Größe')), 'Café,Größe')
+  assert.equal(decodeText(new Uint8Array([0x43, 0x61, 0x66, 0xe9, 0x20, 0x96, 0x20, 0x41])), 'Café – A')
+})
+
+test('ball-in-court cells: person with company becomes the company; "Last, First" stays one person', () => {
+  assert.equal(firstParty('Dana Ortiz (Kessler Ray Architects)'), 'Kessler Ray Architects')
+  assert.equal(firstParty('Ben Fox (Brandt Structural Engineers), Dana Ortiz (Kessler Ray Architects)'), 'Brandt Structural Engineers')
+  assert.equal(firstParty('Ortiz, Dana'), 'Ortiz, Dana')
+  assert.equal(firstParty('Lopez, Ana (Summit Mechanical)'), 'Summit Mechanical')
+  assert.equal(firstParty('Kessler Ray Architects; Brandt Structural Engineers'), 'Kessler Ray Architects')
+  assert.equal(firstParty('[Kessler Ray Architects, Brandt Structural Engineers]'), 'Kessler Ray Architects')
+})
+
+test('Procore RFIs CSV in its documented column layout', () => {
+  const r = importFile('rfis.csv', fixture('procore-rfis-excerpt.csv').toString('utf8'))
+  assert.equal(r.format, 'procore-rfi')
+  assert.equal(r.items.length, 3)
+  const [a, b, c] = r.items
+  assert.equal(a.bic, 'Kessler Ray Architects')
+  assert.equal(a.reviewer, 'Kessler Ray Architects')
+  assert.equal(guessRole(a.bic!), 'Architect')
+  assert.ok(a.open && a.costImpact && a.scheduleImpact)
+  assert.equal(a.costValue, 12500)
+  assert.equal(toIso(a.created), '2026-09-17')
+  assert.equal(b.open, false)
+  assert.equal(b.reviewer, 'Brandt Structural Engineers')
+  assert.equal(toIso(b.responded!), '2026-09-30')
+  assert.equal(toIso(b.closed!), '2026-10-02')
+  assert.equal(c.bic, 'Ortiz, Dana')
+  assert.equal(c.costImpact, false, 'N/A is not an impact')
+})
+
+test('Autodesk Build RFI export from a UK account: title block skipped, dates read day-first', () => {
+  const r = importFile('rfis.csv', fixture('acc-rfis-uk-excerpt.csv').toString('utf8'))
+  assert.equal(r.format, 'acc-rfi')
+  assert.equal(r.skipped, 0)
+  assert.ok(r.issues.some(i => /day\/month\/year/.test(i.message)))
+  const [a, b] = r.items
+  assert.equal(toIso(a.created), '2026-10-05')
+  assert.equal(toIso(a.due!), '2026-10-19')
+  assert.equal(toIso(b.closed!), '2026-10-15')
+  assert.equal(b.open, false)
+})
+
+test('day-first sniffing needs unambiguous evidence', () => {
+  assert.equal(sniffDayFirst(['05/10/2026', '19/10/2026']), true)
+  assert.equal(sniffDayFirst(['05/10/2026', '10/19/2026']), false)
+  assert.equal(sniffDayFirst(['05/10/2026', '13/10/2026', '10/19/2026']), false, 'mixed evidence stays US')
+  assert.equal(sniffDayFirst(['2026-10-19', 'Mon 13/10/26']), true)
+  assert.equal(toIso(parseDate('03/11/2026', true)), '2026-11-03')
+})
+
+test('public holidays from a Nager.Date response: nationwide plus the chosen region only', () => {
+  const list = JSON.parse(fixture('nager-gb-2026-excerpt.json').toString('utf8'))
+  assert.deepEqual(holidaysForRegion(list, 'gb-eng').map(toIso), ['2026-01-01', '2026-04-03', '2026-04-06', '2026-05-04', '2026-08-31', '2026-12-25'])
+  assert.deepEqual(holidaysForRegion(list, 'GB-SCT').map(toIso), ['2026-01-01', '2026-01-02', '2026-04-03', '2026-05-04', '2026-08-03', '2026-12-25'])
+  // Easter Monday is not a working day in England: Thu 2 Apr to Tue 7 Apr is 1 working day (Tue), with Good Friday off too.
+  assert.equal(new Calendar(holidaysForRegion(list, 'GB-ENG')).between(d('2026-04-02'), d('2026-04-07')), 1)
 })

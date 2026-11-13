@@ -44,6 +44,48 @@ export function parseCsv(text: string): Table {
   return { rows, lines }
 }
 
+/** UTF-8 when the bytes are valid UTF-8, else Windows-1252: what Excel "CSV" on Windows and Primavera P6 XER exports write. */
+export function decodeText(buf: ArrayBuffer | Uint8Array): string {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { return new TextDecoder('windows-1252').decode(buf) }
+}
+
+/**
+ * Primavera P6 XER (tab-separated %T table / %F fields / %R rows). Reads the TASK table of the current projects (baselines,
+ * which carry an orig_proj_id, are dropped), skips level-of-effort and WBS summary activities, and returns a schedule table:
+ * start/finish are actuals when the activity has them, else the early (forecast) dates, else planned; total float is
+ * converted from hours using each activity's calendar hours per day; critical means total float <= 0 or on the longest path.
+ */
+export function readXer(text: string): Table {
+  const tables = new Map<string, { fields: string[]; rows: { v: Record<string, string>; line: number }[] }>()
+  let cur: { fields: string[]; rows: { v: Record<string, string>; line: number }[] } | undefined
+  text.split(/\r?\n/).forEach((l, i) => {
+    const p = l.split('\t')
+    if (p[0] === '%T') { cur = { fields: [], rows: [] }; tables.set(p[1]?.trim(), cur) }
+    else if (p[0] === '%F' && cur) cur.fields = p.slice(1).map(f => f.trim())
+    else if (p[0] === '%R' && cur) cur.rows.push({ v: Object.fromEntries(cur.fields.map((f, k) => [f, (p[k + 1] ?? '').trim()])), line: i + 1 })
+  })
+  const task = tables.get('TASK')
+  if (!task) throw new Error('No TASK table in this XER file. Export the project from P6 with activities included.')
+  const baselines = new Set((tables.get('PROJECT')?.rows ?? []).filter(r => r.v.orig_proj_id).map(r => r.v.proj_id))
+  const dayHours = new Map((tables.get('CALENDAR')?.rows ?? []).map(r => [r.v.clndr_id, Number(r.v.day_hr_cnt) || 8]))
+  const rows: string[][] = [['task_code', 'task_name', 'start', 'finish', 'total_float', 'critical']]
+  const lines = [task.rows[0] ? task.rows[0].line - 1 : 1]
+  for (const { v, line } of task.rows) {
+    if (baselines.has(v.proj_id) || v.task_type === 'TT_LOE' || v.task_type === 'TT_WBS') continue
+    const hrs = v.total_float_hr_cnt === '' || v.total_float_hr_cnt === undefined ? NaN : Number(v.total_float_hr_cnt)
+    const float = Number.isNaN(hrs) ? '' : String(Math.round(hrs / (dayHours.get(v.clndr_id) ?? 8)))
+    const done = v.status_code === 'TK_Complete'
+    const critical = !done && (v.driving_path_flag === 'Y' || (float !== '' && Number(float) <= 0))
+    const when = (...k: string[]) => k.map(x => v[x]).find(x => /^\d{4}-\d{2}-\d{2}/.test(x ?? '')) ?? ''
+    rows.push([v.task_code, v.task_name,
+      when('act_start_date', 'early_start_date', 'restart_date', 'target_start_date'),
+      when('act_end_date', 'early_end_date', 'reend_date', 'target_end_date'),
+      done ? '' : float, critical ? 'Y' : 'N'])
+    lines.push(line)
+  }
+  return { rows, lines }
+}
+
 function sniffDelimiter(text: string): string {
   const head = text.slice(0, text.indexOf('\n') === -1 ? text.length : text.indexOf('\n'))
   const counts = [',', '\t', ';', '|'].map(d => [d, head.split(d).length] as const)
@@ -62,13 +104,13 @@ export function findHeader(t: Table, known: Set<string>): Table {
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 /** ISO dates and timestamps, US M/D/YYYY, "Nov 3, 2026", "03-Nov-2026" (P6), "Mon 11/3/26" (MS Project), Excel serials. Returns a day number or NaN. Time-of-day is dropped: aging is counted in whole workdays. */
-export function parseDate(raw: string): Day {
+export function parseDate(raw: string, dayFirst = false): Day {
   let s = raw.trim().replace(/^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+/i, '').replace(/\s*[AB]$/, '') // P6 marks actual/started dates with " A"
   if (!s || /^(n\/?a|none|null|-+)$/i.test(s)) return NaN
   let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
   if (m) return valid(+m[1], +m[2], +m[3])
   m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/)
-  if (m) return valid(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[1], +m[2])
+  if (m) return valid(m[3].length === 2 ? 2000 + +m[3] : +m[3], dayFirst ? +m[2] : +m[1], dayFirst ? +m[1] : +m[2])
   m = s.match(/^(\d{1,2})[-\s]([a-z]{3})[a-z]*[-\s,]+(\d{2}|\d{4})\b/i)
   if (m && MONTHS.includes(m[2].toLowerCase())) return valid(m[3].length === 2 ? 2000 + +m[3] : +m[3], MONTHS.indexOf(m[2].toLowerCase()) + 1, +m[1])
   m = s.match(/^([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b/i)
@@ -210,6 +252,21 @@ export function autoMap(headers: string[], kind: FileKind): Mapping {
   return map
 }
 
+/**
+ * Autodesk Build and Procore export dates in the account's locale, so a UK, Canadian or Australian log says 13/11/2026.
+ * A file is day-first when some slash date only makes sense that way (first part over 12) and none only makes sense US-style.
+ */
+export function sniffDayFirst(values: string[]): boolean {
+  let dm = false, md = false
+  for (const v of values) {
+    const m = v.trim().match(/^(?:[a-z]{3}[a-z]*\.?,?\s+)?(\d{1,2})\/(\d{1,2})\/\d{2,4}\b/i)
+    if (!m) continue
+    if (+m[1] > 12 && +m[2] <= 12) dm = true
+    if (+m[2] > 12 && +m[1] <= 12) md = true
+  }
+  return dm && !md
+}
+
 // ---------- Validation ----------
 
 export interface Issue { line: number; level: 'error' | 'warning'; message: string }
@@ -229,7 +286,18 @@ export function isClosedStatus(s: string): boolean {
   return CLOSED.test(t) && !(REOPEN.test(t) && !/approved|closed/i.test(t))
 }
 
-const first = (s: string) => s.replace(/^\[|\]$/g, '').split(/[;|\n]|,(?=\s*[A-Z])/)[0].trim()
+/**
+ * First party in a ball-in-court or assignee cell. Lists come as "A; B", "A, B" or "[A, B]". A person shown with their
+ * company, "Dana Ortiz (Kessler Ray Architects)", becomes the company, since review periods and roles are per firm.
+ * "Ortiz, Dana" is one person, not two.
+ */
+export function firstParty(s: string): string {
+  const t = s.replace(/^\[|\]$/g, '').trim()
+  const lastFirst = /^[\w'.-]+,\s*[\w'.-]+(\s+\([^)]*\))?$/.test(t)
+  const one = (lastFirst ? t : t.split(/[;|\n]|,(?=\s*[A-Z])/)[0]).trim()
+  return one.match(/\(([^)]*[A-Za-z][^)]*)\)\s*$/)?.[1].trim() || one
+}
+const first = firstParty
 
 export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Kind): Parsed {
   const kind = FORMATS[format].kind
@@ -238,6 +306,10 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
   if (out.issues.length) { out.skipped = out.total; return out }
   const get = (rec: string[], k: string) => map[k] === undefined ? '' : (rec[map[k]] ?? '').trim()
   const seen = new Map<string, number>()
+  const dateCols = ['created', 'due', 'sent', 'responded', 'closed', 'requiredOnSite', 'date', 'start', 'finish'].filter(k => k in map)
+  const dayFirst = sniffDayFirst(t.rows.slice(1).flatMap(rec => dateCols.map(k => get(rec, k))))
+  const parseDay = (raw: string) => parseDate(raw, dayFirst)
+  if (dayFirst) out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Dates like 13/11/2026 found, so slash dates in this file are read as day/month/year' })
   for (let r = 1; r < t.rows.length; r++) {
     const rec = t.rows[r]
     const line = t.lines[r]
@@ -246,7 +318,7 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const date = (k: string, label: string): Day | undefined => {
       const raw = get(rec, k)
       if (!raw) return undefined
-      const d = parseDate(raw)
+      const d = parseDay(raw)
       if (Number.isNaN(d)) { warn(`${label} "${raw.slice(0, 30)}" is not a date; ignored`); return undefined }
       return d
     }
@@ -262,7 +334,7 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
       const id = get(rec, 'id'), name = get(rec, 'name')
       if (!id) { skip('Activity ID is empty'); continue }
       const startRaw = get(rec, 'start')
-      const start = parseDate(startRaw)
+      const start = parseDay(startRaw)
       if (Number.isNaN(start)) { skip(`Start "${startRaw.slice(0, 30)}" is not a date`); continue }
       const finish = date('finish', 'Finish')
       const fl = parseNum(get(rec, 'float'))
@@ -278,7 +350,7 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
 
     if (kind === 'history') {
       const number = get(rec, 'number')
-      const at = parseDate(get(rec, 'date'))
+      const at = parseDay(get(rec, 'date'))
       const bic = first(get(rec, 'bic'))
       if (!number) { skip('Number is empty'); continue }
       if (Number.isNaN(at)) { skip(`Date "${get(rec, 'date').slice(0, 30)}" is not a date`); continue }
@@ -294,7 +366,7 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const title = get(rec, 'title')
     if (!number) { skip('Number is empty'); continue }
     const createdRaw = get(rec, 'created')
-    const created = parseDate(createdRaw)
+    const created = parseDay(createdRaw)
     if (Number.isNaN(created)) { skip(`Created date "${createdRaw.slice(0, 30)}" is not a date`); continue }
     const tk = get(rec, 'type')
     const k: Kind = /sub|shop|product data|sample|mock/i.test(tk) ? 'submittal' : /rfi|request/i.test(tk) ? 'rfi' : itemKind ?? FORMATS[format].itemKind ?? ('spec' in map || 'revision' in map ? 'submittal' : 'rfi')

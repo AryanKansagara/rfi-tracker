@@ -57,3 +57,10 @@ export class Calendar {
     return d
   }
 }
+
+export interface PublicHoliday { date: string; name: string; global: boolean; counties: string[] | null; types?: string[] }
+/** Days off from a Nager.Date public-holiday list (date.nager.at): nationwide ones, plus those for the region, e.g. "GB-ENG" or "CA-ON". Bank and school holidays only count when nationwide or regional "Public" ones. */
+export function holidaysForRegion(list: PublicHoliday[], region: string): Day[] {
+  const r = region.trim().toUpperCase()
+  return list.filter(h => (h.types ?? ['Public']).includes('Public') && (h.global || (!!r && !!h.counties?.includes(r)))).map(h => fromIso(h.date))
+}

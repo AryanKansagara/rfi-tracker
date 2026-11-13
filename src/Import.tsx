@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { asOfDay, itemStates, snapshot } from './engine/analyze.ts'
-import { constructionHolidays, fromIso, toIso } from './engine/calendar.ts'
-import { attachHistory, autoMap, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, type Format, type Mapping, type Table } from './engine/parse.ts'
+import { constructionHolidays, fromIso, holidaysForRegion, toIso, type PublicHoliday } from './engine/calendar.ts'
+import { attachHistory, autoMap, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
 import type { Config, Dataset, Kind } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { putData, saveProject, uuid, type Project } from './store.ts'
@@ -46,7 +46,7 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
     for (const f of [...files]) {
       if (f.size > 50_000_000) { toast(`${f.name} is over 50 MB. Export one log at a time.`, { tone: 'error' }); continue }
       try {
-        const table = /\.xls[xm]?$/i.test(f.name) ? await readXlsx(f) : findHeaderRow(parseCsv(await f.text()))
+        const table = /\.xls[xm]?$/i.test(f.name) ? await readXlsx(f) : /\.xer$/i.test(f.name) ? readXer(decodeText(await f.arrayBuffer())) : findHeaderRow(parseCsv(decodeText(await f.arrayBuffer())))
         if (table.rows.length < 2) { toast(`${f.name} has no data rows.`, { tone: 'error' }); continue }
         const format = detectFormat(table.rows[0])
         next.push({ id: uuid(), name: f.name, format, table, map: autoMap(table.rows[0], FORMATS[format].kind), itemKind: FORMATS[format].itemKind ?? (/submittal/i.test(f.name) ? 'submittal' : /rfi/i.test(f.name) ? 'rfi' : undefined) })
@@ -90,6 +90,21 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
   }
 
   const holidays = cfg.holidays.map(toIso).join('\n')
+  const loadPublic = async (region: string) => {
+    const r = region.trim().toUpperCase(), country = r.split('-')[0]
+    if (!/^[A-Z]{2}$/.test(country)) { toast('Use a two-letter country code, optionally with a region: GB-ENG, CA-ON.', { tone: 'error' }); return }
+    try {
+      const y = new Date().getUTCFullYear()
+      const lists = await Promise.all([y - 1, y, y + 1].map(async yr => {
+        const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${yr}/${country}`)
+        if (!res.ok) throw new Error(res.status === 404 ? `No holiday data for ${country}` : `Holiday service returned ${res.status}`)
+        return await res.json() as PublicHoliday[]
+      }))
+      const days = [...new Set(lists.flatMap(l => holidaysForRegion(l, r)))].sort((a, b) => a - b)
+      setConfig({ holidays: days })
+      toast(`Loaded ${days.length} public holidays for ${r}, ${y - 1}-${y + 1}`, { tone: 'ok' })
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not load holidays', { tone: 'error' }) }
+  }
   const counts = { rfi: ds.items.filter(i => i.kind === 'rfi').length, sub: ds.items.filter(i => i.kind === 'submittal').length, hist: ds.items.filter(i => i.history?.length).length }
 
   return (
@@ -106,8 +121,8 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
           onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
           onDrop={e => { e.preventDefault(); setDrag(false); void readFiles(e.dataTransfer.files) }}>
           <h3>{busy ? 'Reading files' : 'Drop exports here, or click to choose'}</h3>
-          <p className="muted small" style={{ margin: 0 }}>RFI log, submittal log, status history, schedule, spec sections. Parsed in your browser. Re-importing updates items by number instead of duplicating.</p>
-          <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.xlsm" multiple hidden onChange={e => { if (e.target.files) void readFiles(e.target.files); e.target.value = '' }} />
+          <p className="muted small" style={{ margin: 0 }}>RFI log, submittal log, status history, schedule (P6 .xer, MS Project or CSV), spec sections. Parsed in your browser. Re-importing updates items by number instead of duplicating.</p>
+          <input ref={input} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.xlsm,.xer" multiple hidden onChange={e => { if (e.target.files) void readFiles(e.target.files); e.target.value = '' }} />
         </div>
         <p className="small muted">Templates: {Object.keys(TEMPLATES).map((n, i) => <span key={n}>{i ? ' · ' : ''}<button type="button" className="linkish" onClick={() => download(n, TEMPLATES[n])}>{n.replace('-template.csv', '').replace(/-/g, ' ')}</button></span>)}</p>
       </div>
@@ -129,7 +144,17 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
             setConfig({ holidays: [...new Set(days)].sort((x, y) => x - y) })
           }} />
         </label>
-        <button type="button" className="btn ghost sm" onClick={() => { const y = new Date().getUTCFullYear(); setConfig({ holidays: [y - 1, y, y + 1].flatMap(constructionHolidays) }); toast('Reset to the US construction holidays', { tone: 'ok' }) }}>Reset to US construction holidays</button>
+        <div className="row gap wrap" style={{ alignItems: 'flex-end' }}>
+          <button type="button" className="btn ghost sm" onClick={() => { const y = new Date().getUTCFullYear(); setConfig({ holidays: [y - 1, y, y + 1].flatMap(constructionHolidays) }); toast('Reset to the US construction holidays', { tone: 'ok' }) }}>Reset to US construction holidays</button>
+          <form className="row gap-sm" style={{ alignItems: 'flex-end' }} onSubmit={e => { e.preventDefault(); void loadPublic(String(new FormData(e.currentTarget).get('region'))) }}>
+            <label className="field" style={{ margin: 0 }}><span>Or public holidays for</span>
+              <input name="region" list="regions" defaultValue="GB-ENG" size={8} aria-describedby="region-hint" />
+              <datalist id="regions">{['US', 'CA-ON', 'CA-BC', 'CA-AB', 'CA-QC', 'GB-ENG', 'GB-SCT', 'IE', 'AU-NSW', 'AU-VIC', 'AU-QLD', 'NZ'].map(r => <option key={r} value={r} />)}</datalist>
+            </label>
+            <button type="submit" className="btn ghost sm">Load</button>
+          </form>
+        </div>
+        <p className="muted small" id="region-hint">Country or region code (GB-ENG, CA-ON, AU-NSW). Official public holidays for last, this and next year from the free <a href="https://date.nager.at" target="_blank" rel="noreferrer">Nager.Date</a> service; they replace the list above.</p>
       </div>
 
       {(project.imports.length > 0 || ds.items.length > 0) && (
