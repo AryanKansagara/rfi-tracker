@@ -35,4 +35,4 @@ npm run build
 ```
 Optional sync: copy `.env.example` to `.env` with a Supabase URL and publishable key.
 
-Built by Aryan Kansagara. Independent project, not affiliated with Autodesk.
+Built by Aryan Kansagara.
