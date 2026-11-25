@@ -4,7 +4,7 @@ import { constructionHolidays, fromIso, holidaysForRegion, toIso, type PublicHol
 import { attachHistory, autoMap, dateCellsToIso, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
 import type { Config, Dataset, Kind } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
-import { putData, saveProject, uuid, type Project } from './store.ts'
+import { getData, getProject, putData, saveProject, uuid, type Project } from './store.ts'
 import { RAW_SYNC_LIMIT, useSync } from './sync.ts'
 import { ask, download, fmtDay, go, Link, toast } from './ui.tsx'
 
@@ -30,6 +30,17 @@ async function readXlsx(f: File): Promise<Table> {
     if (t.rows.length > 1 && detectFormat(t.rows[0]) !== 'generic-items') return t
   }
   return best ?? { rows: [], lines: [] }
+}
+
+/** Commits run one after another, each on what the one before stored. Files queued together on a sample go into one new project. */
+let queue: Promise<unknown> = Promise.resolve()
+let queued = 0
+const fromSample = new Map<string, string>()
+function inTurn(job: () => Promise<void>): Promise<void> {
+  queued++
+  const run = queue.then(job).finally(() => { if (--queued === 0) fromSample.clear() })
+  queue = run.catch(() => {})
+  return run
 }
 
 export default function DataTab({ project, ds, update, setConfig }: { project: Project; ds: Dataset; update(p: Partial<Project>): void; setConfig(p: Partial<Config>): void }) {
@@ -58,37 +69,39 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
   }
 
   /** Samples are read-only: importing into one starts a new project. */
-  const commit = async (p: Pending, parsed: ReturnType<typeof parseTable>) => {
+  const commit = (p: Pending, parsed: ReturnType<typeof parseTable>) => inTurn(async () => {
     const kind = FORMATS[p.format].kind
-    const t = project.sampleId ? await createBlankProject('My project') : project
-    const base: Dataset = project.sampleId ? { items: [], activities: [], specs: [] } : ds
+    const id = project.sampleId ? fromSample.get(project.id) : project.id
+    const base: Dataset = (id && await getData(id)) || { items: [], activities: [], specs: [] }
+    if (kind === 'history' && !base.items.length) { toast('Import the RFI or submittal log first, then its history.', { tone: 'error' }); return }
+    const t = id ? getProject(id) : await createBlankProject('My project')
+    if (!t) { toast(`${p.name} was not imported: the project has been deleted.`, { tone: 'error' }); return }
+    if (project.sampleId) fromSample.set(project.id, t.id)
     let next: Dataset = base
     let rows = 0, note = ''
     if (kind === 'items') { next = { ...base, items: mergeItems(base.items, parsed.items) }; rows = parsed.items.length }
     if (kind === 'schedule') { next = { ...base, activities: parsed.activities }; rows = parsed.activities.length }
     if (kind === 'specs') { next = { ...base, specs: parsed.specs }; rows = parsed.specs.length }
     if (kind === 'history') {
-      if (!base.items.length) { toast('Import the RFI or submittal log first, then its history.', { tone: 'error' }); return }
       const r = attachHistory(base.items, parsed.history)
       next = { ...base, items: r.items }; rows = parsed.history.length
       note = r.unmatched.length ? `; ${r.unmatched.length} numbers not in the log` : ''
     }
     await putData(t.id, next)
+    const now = getProject(t.id) ?? t // settings may have changed while the data was written
     const meta = { id: uuid(), format: p.format, fileName: p.name, rows, skipped: parsed.skipped, at: Date.now() }
-    const tcfg = project.sampleId ? t.config : cfg
     // Each items import also records a dated snapshot, so History fills up without extra clicks.
-    const snaps = project.sampleId ? [] : project.snapshots
-    let snapshots = snaps
+    let snapshots = now.snapshots
     if (kind === 'items' || kind === 'history') {
-      const asOf = asOfDay(tcfg)
-      const snap = snapshot(itemStates(next, tcfg), asOf, uuid(), `Import ${fmtDay(asOf)}`)
-      snapshots = [...snaps.filter(s => s.asOf !== asOf), snap].sort((x, y) => x.asOf - y.asOf)
+      const asOf = asOfDay(now.config)
+      const snap = snapshot(itemStates(next, now.config), asOf, uuid(), `Import ${fmtDay(asOf)}`)
+      snapshots = [...now.snapshots.filter(s => s.asOf !== asOf), snap].sort((x, y) => x.asOf - y.asOf)
     }
-    await saveProject({ ...t, config: tcfg, imports: [...(project.sampleId ? [] : project.imports), meta], snapshots, dataMissing: false })
+    await saveProject({ ...now, imports: [...now.imports, meta], snapshots, dataMissing: false })
     setPending(x => x.filter(y => y.id !== p.id))
     toast(`Imported ${rows.toLocaleString()} ${kind === 'items' ? 'items' : kind === 'schedule' ? 'activities' : kind === 'specs' ? 'spec sections' : 'history events'}${parsed.skipped ? `, skipped ${parsed.skipped}` : ''}${note}`, { tone: 'ok' })
     if (project.sampleId) go(`/app/p/${t.id}/data`)
-  }
+  })
 
   const holidays = cfg.holidays.map(toIso).join('\n')
   const loadPublic = async (region: string) => {
