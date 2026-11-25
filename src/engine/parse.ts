@@ -49,6 +49,18 @@ export function decodeText(buf: ArrayBuffer | Uint8Array): string {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { return new TextDecoder('windows-1252').decode(buf) }
 }
 
+interface Cell { t?: string; v?: unknown; z?: unknown; w?: string }
+interface Book { Sheets: Record<string, object>; Workbook?: { WBProps?: { date1904?: boolean } } }
+/** Excel dates are day counts shown in any format ("03/10/2026", "Oct-26"), so their text is replaced by the ISO date. `ssf` is SheetJS's number-format module. */
+export function dateCellsToIso(wb: Book, ssf: { is_date(fmt: string): boolean }) {
+  const shift = wb.Workbook?.WBProps?.date1904 ? 1462 : 0
+  for (const sheet of Object.values(wb.Sheets)) for (const c of Object.values(sheet) as Cell[]) {
+    if (c?.t !== 'n' || typeof c.v !== 'number' || typeof c.z !== 'string' || !ssf.is_date(c.z)) continue
+    const serial = Math.floor(c.v) + shift
+    if (serial > 20000 && serial < 80000) c.w = toIso(serial - 25569)
+  }
+}
+
 /**
  * Primavera P6 XER (tab-separated %T table / %F fields / %R rows). Reads the TASK table of the current projects (baselines,
  * which carry an orig_proj_id, are dropped), skips level-of-effort and WBS summary activities, and returns a schedule table:
