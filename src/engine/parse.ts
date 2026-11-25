@@ -147,6 +147,19 @@ export function parseNum(raw: string): number {
   return m ? Number(m[0]) : NaN
 }
 
+/** MS Project abbreviations in days, at its default 8-hour day, 5-day week and 20-day month. */
+const SLACK_UNITS: [RegExp, number][] = [
+  [/^(m|mins?|minutes?)$/, 1 / 480], [/^(h|hrs?|hours?)$/, 1 / 8], [/^(d|dys?|days?)$/, 1], [/^(w|wks?|weeks?)$/, 5], [/^(mos?|mons?|months?)$/, 20],
+]
+/** Total float or slack in days: "2 wks", "16 hrs", "1 mon", "3 days?" (estimated), "-5". A bare number is in `bare` units of a day. Anything else is NaN. */
+export function parseSlack(raw: string, bare = 1): number {
+  const s = raw.trim().toLowerCase().replace(/^\((.*)\)$/, '-$1').replace(/^−/, '-').replace(/\s+(?=\d)/g, '').replace(/,(?=\d{3}(?!\d))/g, '').replace(/(\d),(?=\d)/, '$1.')
+  const m = s.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*([a-z]*)\.?\s*\??$/)
+  if (!m) return NaN
+  const unit = m[2] ? SLACK_UNITS.find(([re]) => re.test(m[2]))?.[1] : bare
+  return unit === undefined ? NaN : Math.round(Number(m[1]) * unit) + 0
+}
+
 const LEAD_UNITS: [RegExp, (n: number) => number][] = [
   [/^(w(or)?k(ing)?[\s-]?days?|business[\s-]?days?|wd|bd)\b/, n => Math.ceil(n * 7 / 5)], // five a week
   [/^(w|wks?|weeks?)\b/, n => n * 7],
@@ -382,9 +395,11 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
       const start = parseDay(startRaw)
       if (Number.isNaN(start)) { skip(`Start "${startRaw.slice(0, 30)}" is not a date`); continue }
       const finish = date('finish', 'Finish')
-      const fl = parseNum(get(rec, 'float'))
+      const floatRaw = get(rec, 'float')
       // P6 stores float in hours (total_float_hr_cnt); convert at 8 h per day.
-      const totalFloat = Number.isNaN(fl) ? undefined : format === 'p6' && norm((t.rows[0][map.float] ?? '')).includes('hr') ? Math.round(fl / 8) : Math.round(fl)
+      const fl = parseSlack(floatRaw, format === 'p6' && norm((t.rows[0][map.float] ?? '')).includes('hr') ? 1 / 8 : 1)
+      if (Number.isNaN(fl) && floatRaw && !/^(n\/?a|none|null|-+)$/i.test(floatRaw)) warn(`Total float "${floatRaw.slice(0, 30)}" is not a duration; left blank`)
+      const totalFloat = Number.isNaN(fl) ? undefined : fl
       const critRaw = get(rec, 'critical')
       const critical = critRaw ? /^(y|yes|true|1)/i.test(critRaw) : totalFloat !== undefined && totalFloat <= 0
       if (seen.has(id)) warn(`Activity ${id} appears twice; the later row wins`)
