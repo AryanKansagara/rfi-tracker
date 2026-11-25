@@ -205,6 +205,14 @@ export function parseLead(raw: string, header = ''): number {
   return Math.round(m[3] === undefined ? days(m[1], a) : Math.max(days(m[1], a || b), days(m[3], b || a)))
 }
 
+/** Revision numbers as exported: "1", "01", "Rev 1", "R2", "Rev. 03", "Revision 2", "#1". Blank is 0; a label with no number ("A") is NaN. */
+export function parseRevision(raw: string): number {
+  const s = raw.trim()
+  if (!s || /^(n\/?a|none|null|-+)$/i.test(s)) return 0
+  const m = s.match(/^(?:(?:rev(?:ision)?|r)(?:[\s.]*no\b)?|no\b)?[\s.:#_-]*(\d+)(?![\da-z])/i)
+  return Math.max(0, Math.round(/^-?\d/.test(s) ? parseNum(s) : m ? Number(m[1]) : NaN))
+}
+
 /** "Yes", "Yes ($12,500)", "TBD" and "Unknown" count as a potential impact; "No", "N/A" and blank do not. */
 export const isImpact = (raw: string) => /^(y|yes|true|tbd|unknown|possible|1)\b/i.test(raw.trim())
 
@@ -464,7 +472,9 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const status = /^(yes|true)$/i.test(statusRaw) ? 'Closed' : /^(no|false)$/i.test(statusRaw) ? 'Open' : statusRaw
     const closed = closedWord ? undefined : date('closed', 'Closed date')
     const revRaw = get(rec, 'revision')
-    const revision = Math.max(0, Number.isNaN(parseNum(revRaw)) ? 0 : Math.round(parseNum(revRaw)))
+    const rev = parseRevision(revRaw)
+    if (Number.isNaN(rev)) warn(`Revision "${revRaw.slice(0, 30)}" is not a number; read as 0`)
+    const revision = Number.isNaN(rev) ? 0 : rev
     const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead'), t.rows[0][map.lead]) : NaN
     if (get(rec, 'lead') && Number.isNaN(lead)) warn(`Lead time "${get(rec, 'lead')}" is not a lead time; the project default is used`)
     const cv = parseNum(get(rec, 'costValue'))
