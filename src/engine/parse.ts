@@ -131,14 +131,29 @@ export function parseNum(raw: string): number {
   return m ? Number(m[0]) : NaN
 }
 
-/** Lead times arrive as "6 weeks", "30d", "45", "8 wks". Returns calendar days. */
-export function parseLead(raw: string): number {
-  const s = raw.trim().toLowerCase()
-  const n = parseNum(s)
-  if (Number.isNaN(n)) return NaN
-  if (/w/.test(s)) return Math.round(n * 7)
-  if (/mo/.test(s)) return Math.round(n * 30)
-  return Math.round(n)
+const LEAD_UNITS: [RegExp, (n: number) => number][] = [
+  [/^(w(or)?k(ing)?[\s-]?days?|business[\s-]?days?|wd|bd)\b/, n => Math.ceil(n * 7 / 5)], // five a week
+  [/^(w|wks?|weeks?)\b/, n => n * 7],
+  [/^(m|mos?|months?|mths?)\b/, n => n * 30],
+  [/^(d|days?|calendar[\s-]?days?|cal[\s-]?days?|cd)\b/, n => n],
+]
+
+/**
+ * Lead times arrive as "6 weeks", "30d", "45", "10 working days", "6-8 weeks". Returns calendar days, the longer end of a
+ * range. A bare number takes its unit from the column name ("Lead time (weeks)"), else days. Unknown units are NaN.
+ */
+export function parseLead(raw: string, header = ''): number {
+  const s = raw.trim().toLowerCase().replace(/(\d),(\d{3})(?!\d)/g, '$1$2')
+  const unitOf = (u: string) => LEAD_UNITS.find(([re]) => re.test(u))?.[1]
+  const m = s.match(/^[~≈]?\s*(\d+(?:[.,]\d+)?)\s*([^\d(]*?)(?:(?:-|–|—|\bto\b)\s*(\d+(?:[.,]\d+)?)\s*(.*))?$/) ?? s.match(/^[~≈]?\s*(\d+(?:[.,]\d+)?)\s*(.*)$/)
+  if (!m) return NaN
+  const head = header.toLowerCase().split(/[^a-z]+/).filter(Boolean)
+  const columnUnit = head.map((_, i) => unitOf(head.slice(i).join(' '))).find(Boolean) ?? ((x: number) => x)
+  const num = (x: string) => Number(x.replace(',', '.'))
+  const words = (x = '') => x.replace(/^[\s+-]+/, '').replace(/[.,;]+(?=\s|$)/g, '').trim()
+  const days = (n: string, u: string) => { const f = u === '' || u.startsWith('(') ? columnUnit : unitOf(u); return f ? f(num(n)) : NaN }
+  const [a, b] = [words(m[2]), words(m[4])]
+  return Math.round(m[3] === undefined ? days(m[1], a) : Math.max(days(m[1], a || b), days(m[3], b || a)))
 }
 
 /** "Yes", "Yes ($12,500)", "TBD" and "Unknown" count as a potential impact; "No", "N/A" and blank do not. */
@@ -375,8 +390,8 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const closed = date('closed', 'Closed date')
     const revRaw = get(rec, 'revision')
     const revision = Math.max(0, Number.isNaN(parseNum(revRaw)) ? 0 : Math.round(parseNum(revRaw)))
-    const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead')) : NaN
-    if (get(rec, 'lead') && Number.isNaN(lead)) warn(`Lead time "${get(rec, 'lead')}" is not a number; the project default is used`)
+    const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead'), t.rows[0][map.lead]) : NaN
+    if (get(rec, 'lead') && Number.isNaN(lead)) warn(`Lead time "${get(rec, 'lead')}" is not a lead time; the project default is used`)
     const cv = parseNum(get(rec, 'costValue'))
     const item: Item = {
       key: `${k}:${number}`, kind: k, number, title: title || '(untitled)', status: status || (closed !== undefined ? 'Closed' : 'Open'),

@@ -1,7 +1,7 @@
 import { choose, commit, expect, newProject, openTab, pending, soon, test } from '../fixtures.ts'
 
-// Issue #6
-test.fail('lead times keep their unit', async ({ page }) => {
+// Regression: issue #6
+test('lead times keep their unit', async ({ page }) => {
   const head = (unit: string) => `Number,Title,Spec section,Status,Ball in court,Created on,Required on job date,Lead time${unit}\n`
   await newProject(page)
   await choose(page,
