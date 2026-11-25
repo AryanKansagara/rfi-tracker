@@ -28,6 +28,8 @@ export interface Segment { firm: string; role: Role; from: Day; to: Day; open: b
  * created to sent is the contractor side, sent (or created) to responded is the reviewer, responded to closed is back with the GC.
  */
 export function segments(item: Item, cfg: Config, cal = calendarFor(cfg), asOf = asOfDay(cfg)): Segment[] {
+  // Closed, but the log does not say when: the hold that was running at the end has no length, so it is left out.
+  const endless = !item.open && item.closed === undefined
   const end = item.open ? asOf : item.closed ?? asOf
   const raw: { firm: string; from: Day }[] = []
   if (item.history?.length) {
@@ -66,6 +68,7 @@ export function segments(item: Item, cfg: Config, cal = calendarFor(cfg), asOf =
     // The exported due date is the contractual one for the reviewer segment it belongs to.
     const dueAt = i === lastRev && item.due !== undefined && item.due > s.from ? item.due : cal.add(s.from, allowed)
     const days = cal.between(s.from, to)
+    if (isLast && endless) break
     const open = isLast && item.open
     const late = to > dueAt ? cal.between(dueAt, to) : 0
     out.push({ firm: s.firm, role, from: s.from, to, open, days, allowed, dueAt, late })
@@ -181,11 +184,11 @@ export function itemStates(ds: Dataset, cfg: Config): ItemState[] {
     const dueLate = holder ? holder.late : 0
     return {
       item, segs, holder, linked,
-      age: cal.between(item.created, item.open ? asOf : item.closed ?? asOf),
+      age: cal.between(item.created, item.open ? asOf : item.closed ?? item.created),
       inCourt: holder?.days ?? 0,
       overdue: dueLate > 0,
       daysLate: dueLate,
-      sched: closedThreat(item.open || linked ? scheduleCalc(item, linked, segs, cfg, cal, asOf) : undefined, item.open, asOf),
+      sched: closedThreat(item.open || (linked && item.closed !== undefined) ? scheduleCalc(item, linked, segs, cfg, cal, asOf) : undefined, item.open, asOf),
     }
   })
 }
@@ -260,7 +263,7 @@ export interface BurnDown { history: BurnPoint[]; forecast: BurnPoint[]; netPerW
 
 /** Weekly open count for the last `weeks` weeks, then a straight-line projection from the average net close rate. */
 export function burnDown(items: Item[], asOf: Day, weeks = 8, ahead = 12): BurnDown {
-  const openAt = (d: Day) => items.filter(i => i.created <= d && (i.open || (i.closed ?? Infinity) > d)).length
+  const openAt = (d: Day) => items.filter(i => i.created <= d && (i.open || (i.closed !== undefined && i.closed > d))).length
   const history: BurnPoint[] = []
   for (let w = weeks; w >= 0; w--) {
     const end = asOf - w * 7

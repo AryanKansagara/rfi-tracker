@@ -13,6 +13,8 @@ const Tabs = lazy(() => import('./Tabs.tsx'))
 
 const TABS = [['overview', 'Overview'], ['log', 'Log'], ['schedule', 'Schedule'], ['parties', 'Parties'], ['actions', 'Actions'], ['history', 'History'], ['data', 'Data']] as const
 
+/** A closed item whose log gives no close date has no age. */
+export const ageKnown = (s: ItemState) => s.item.open || s.item.closed !== undefined
 export const itemLabel = (s: ItemState) => `${s.item.kind === 'rfi' ? 'RFI' : 'SUB'} ${s.item.number}`
 
 export function saveSnapshot(project: P, a: Analysis, update: (p: Partial<P>) => void, label?: string) {
@@ -206,7 +208,7 @@ function Log({ a, focus, setFocus, name }: { a: Analysis; focus?: string; setFoc
   )
   const exportCsv = () => download(`${name.replace(/\W+/g, '-').toLowerCase()}-log-${toIso(a.asOf)}.csv`, toCsv([
     ['Type', 'Number', 'Title', 'Status', 'Ball in court', 'Party', 'Workdays in court', 'Age (workdays)', 'Due', 'Workdays late', 'Float', 'Revision', 'Cost impact', 'Schedule impact'],
-    ...rows.map(s => [s.item.kind, s.item.number, s.item.title, s.item.status, s.holder?.firm ?? '', s.holder?.role ?? '', s.inCourt, s.age, s.holder ? toIso(s.holder.dueAt) : '', s.daysLate, s.sched?.float ?? '', s.item.revision, s.item.costImpact ? 'Yes' : 'No', s.item.scheduleImpact ? 'Yes' : 'No'])]))
+    ...rows.map(s => [s.item.kind, s.item.number, s.item.title, s.item.status, s.holder?.firm ?? '', s.holder?.role ?? '', s.inCourt, ageKnown(s) ? s.age : '', s.holder ? toIso(s.holder.dueAt) : '', s.daysLate, s.sched?.float ?? '', s.item.revision, s.item.costImpact ? 'Yes' : 'No', s.item.scheduleImpact ? 'Yes' : 'No'])]))
   return (
     <div className="panel">
       <div className="toolbar">
@@ -227,7 +229,7 @@ function Log({ a, focus, setFocus, name }: { a: Analysis; focus?: string; setFoc
                 <td className="break">{s.item.title}<div className="muted tiny">{s.item.status}{s.item.spec ? ` · ${s.item.spec}` : ''}</div></td>
                 <td>{s.holder ? <><RoleDot role={s.holder.role} /> {s.holder.firm}</> : <span className="muted">Closed {fmtShort(s.item.closed)}</span>}</td>
                 <td className="num">{s.holder ? s.inCourt : ''}</td>
-                <td className="num">{s.age}</td>
+                <td className="num">{ageKnown(s) ? s.age : '—'}</td>
                 <td className="nowrap">{s.holder ? fmtShort(s.holder.dueAt) : ''}</td>
                 <td className={`num${s.overdue ? ' error strong' : ''}`}>{s.overdue ? s.daysLate : ''}</td>
                 <td className={`num${s.sched && s.sched.float < 0 ? ' error' : ''}`}>{s.sched && s.item.open ? (s.sched.float > 0 ? '+' : '') + s.sched.float : ''}</td>
