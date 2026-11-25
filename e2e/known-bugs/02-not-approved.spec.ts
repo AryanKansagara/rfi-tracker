@@ -1,7 +1,7 @@
 import { expect, H, logOf, soon, test } from '../fixtures.ts'
 
-// Issue #2
-test.fail('refused and unfinished statuses stay open', async ({ page }) => {
+// Regression: issue #2
+test('refused and unfinished statuses stay open', async ({ page }) => {
   const open = ['Not approved', 'Not accepted', 'Not yet answered', 'To be reviewed', 'Partially approved']
   const closed = ['No exceptions taken', 'Approved as noted', 'Closed - not approved', 'Void', 'Answered']
   await logOf(page, H + [...open, ...closed].map((s, i) => `${i + 1},${s} item,${s},Ray Architects,Ray Architects,2026-10-01,,2026-10-05,\n`).join(''))

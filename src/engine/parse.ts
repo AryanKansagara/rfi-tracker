@@ -277,12 +277,16 @@ export interface Parsed {
 
 const CLOSED = /\b(closed|void|voided|approved|no exceptions?|reviewed|distributed|complete[d]?|answered|accepted|responded|for record)\b/i
 const REOPEN = /\b(revise|resubmit|rejected|not approved|open|draft|pending|in review|submitted|returned)\b/i
-/** Status words that mean the item is finished. "Approved as noted" closes; "Revise and resubmit" does not. */
+/** A finished word that is denied, partial or still to come: "Not yet approved", "Partially answered", "To be reviewed". */
+const UNFINISHED = /\b(?:not|never|non|partial(?:ly)?|to be|yet to be|pending|awaiting)[\s-]+(?:(?:yet|been|being|fully|formally|all)\s+)*(?:approved|accepted|closed|reviewed|distributed|completed?|answered|responded)\b/gi
+/** Status words that mean the item is finished. "Approved as noted" closes; "Revise and resubmit" and "Not approved" do not. */
 export function isClosedStatus(s: string): boolean {
   const t = s.trim()
   if (!t) return false
   if (/^(yes|true)$/i.test(t)) return true // Procore "Closed?" column
   if (/revise|resubmit|reject/i.test(t)) return false
+  const rest = t.replace(UNFINISHED, ' ')
+  if (rest !== t) return /\b(closed|void|voided)\b/i.test(rest)
   return CLOSED.test(t) && !(REOPEN.test(t) && !/approved|closed/i.test(t))
 }
 
