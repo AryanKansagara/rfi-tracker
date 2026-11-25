@@ -37,20 +37,23 @@ export function segments(item: Item, cfg: Config, cal = calendarFor(cfg), asOf =
     const gc = cfg.gcName || 'GC'
     const bicRole = item.bic ? roleOf(item.bic, cfg) : undefined
     const withContractor = item.open && !!item.bic && !REVIEWERS.includes(bicRole!)
-    const reviewer = item.reviewer ?? (item.bic && !withContractor ? item.bic : 'Reviewer')
+    // The log says who holds an open item now. Before a response, that firm stands for the whole review.
+    const holder = item.open && item.bic && !withContractor ? item.bic : undefined
+    const reviewer = (item.responded === undefined ? holder ?? item.reviewer : item.reviewer ?? holder) ?? (item.bic && !withContractor ? item.bic : 'Reviewer')
     if (item.sent === undefined && item.responded === undefined && withContractor) {
       // Never sent and not with a reviewer: still being written or prepared.
       raw.push({ firm: item.bic!, from: item.created })
     } else {
       if (item.sent !== undefined && item.sent > item.created) raw.push({ firm: gc, from: item.created })
       raw.push({ firm: reviewer, from: item.sent ?? item.created })
-      if (item.responded !== undefined) raw.push({ firm: withContractor ? item.bic! : gc, from: item.responded })
+      if (item.responded !== undefined) raw.push({ firm: withContractor ? item.bic! : holder ?? gc, from: item.responded })
       // Back with the contractor but no response date exported: assume it came back on its due date.
       else if (withContractor) raw.push({ firm: item.bic!, from: Math.min(asOf, Math.max(item.sent ?? item.created, item.due ?? item.sent ?? item.created)) })
     }
   }
   const out: Segment[] = []
-  const sorted = raw.filter(r => r.from <= end).sort((a, b) => a.from - b.from)
+  // Back-to-back entries for one firm are one hold, so a status change does not restart or replace its due date.
+  const sorted = raw.filter(r => r.from <= end).sort((a, b) => a.from - b.from).filter((r, i, xs) => !i || xs[i - 1].firm !== r.firm)
   const roleAt = (f: string): Role => f === 'Reviewer' ? 'Architect' : roleOf(f, cfg)
   let lastRev = -1
   sorted.forEach((r, i) => { if (REVIEWERS.includes(roleAt(r.firm))) lastRev = i })
@@ -65,7 +68,6 @@ export function segments(item: Item, cfg: Config, cal = calendarFor(cfg), asOf =
     const days = cal.between(s.from, to)
     const open = isLast && item.open
     const late = to > dueAt ? cal.between(dueAt, to) : 0
-    if (out.length && out.at(-1)!.firm === s.firm) { const p = out.at(-1)!; p.to = to; p.days += days; p.open = open; p.late = to > p.dueAt ? cal.between(p.dueAt, to) : 0; continue }
     out.push({ firm: s.firm, role, from: s.from, to, open, days, allowed, dueAt, late })
   }
   return out
@@ -116,7 +118,8 @@ export function scheduleCalc(item: Item, act: Activity | undefined, segs: Segmen
     const lead = item.leadDays ?? cfg.defaultLeadDays
     const cycles = Math.max(1, cfg.reviewCycles - Math.min(item.revision, cfg.reviewCycles - 1))
     const submitBy = cal.add(need - lead, -cycles * period)
-    const approved = !item.open || (item.responded !== undefined && !/revise|resubmit|reject/i.test(item.status))
+    const last = segs.at(-1)
+    const approved = !item.open || (item.responded !== undefined && !(last && REVIEWERS.includes(last.role)) && !/revise|resubmit|reject/i.test(item.status))
     let forecast: Day, stage: ScheduleCalc['stage']
     if (approved) { stage = 'approved'; forecast = (item.responded ?? item.closed ?? asOf) + lead }
     else if (item.sent !== undefined || segs.some(s => REVIEWERS.includes(s.role) && s.open)) {
