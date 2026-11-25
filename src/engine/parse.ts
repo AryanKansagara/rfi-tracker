@@ -3,7 +3,8 @@ import type { Activity, Day, HistoryEvent, Item, Kind, SpecSection } from './typ
 
 // ---------- CSV ----------
 
-export interface Table { rows: string[][]; lines: number[] }
+/** `unterminated`: the file does not end with a line break, so its last row may have been cut off. */
+export interface Table { rows: string[][]; lines: number[]; unterminated?: boolean }
 
 export function parseCsv(text: string): Table {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
@@ -13,6 +14,7 @@ export function parseCsv(text: string): Table {
   let row: string[] = []
   let field = ''
   let quoted = false
+  let quoteLine = 1
   let line = 1
   let rowLine = 1
   for (let i = 0; i < text.length; i++) {
@@ -26,7 +28,7 @@ export function parseCsv(text: string): Table {
       }
       continue
     }
-    if (c === '"' && field === '') quoted = true
+    if (c === '"' && field === '') { quoted = true; quoteLine = line }
     else if (c === delim) { row.push(field); field = '' }
     else if (c === '\n' || c === '\r') {
       if (c === '\r' && text[i + 1] === '\n') i++
@@ -37,9 +39,10 @@ export function parseCsv(text: string): Table {
       rowLine = line
     } else field += c
   }
+  if (quoted) throw new Error(`A quoted value opened on line ${quoteLine} is never closed, so the rows after it cannot be read. The file is cut off or a quote is missing; export it again.`)
   if (field !== '' || row.length) {
     row.push(field)
-    if (row.some(v => v.trim() !== '')) { rows.push(row); lines.push(rowLine) }
+    if (row.some(v => v.trim() !== '')) { rows.push(row); lines.push(rowLine); return { rows, lines, unterminated: true } }
   }
   return { rows, lines }
 }
@@ -47,6 +50,18 @@ export function parseCsv(text: string): Table {
 /** UTF-8 when the bytes are valid UTF-8, else Windows-1252: what Excel "CSV" on Windows and Primavera P6 XER exports write. */
 export function decodeText(buf: ArrayBuffer | Uint8Array): string {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { return new TextDecoder('windows-1252').decode(buf) }
+}
+
+interface Cell { t?: string; v?: unknown; z?: unknown; w?: string }
+interface Book { Sheets: Record<string, object>; Workbook?: { WBProps?: { date1904?: boolean } } }
+/** Excel dates are day counts shown in any format ("03/10/2026", "Oct-26"), so their text is replaced by the ISO date. `ssf` is SheetJS's number-format module. */
+export function dateCellsToIso(wb: Book, ssf: { is_date(fmt: string): boolean }) {
+  const shift = wb.Workbook?.WBProps?.date1904 ? 1462 : 0
+  for (const sheet of Object.values(wb.Sheets)) for (const c of Object.values(sheet) as Cell[]) {
+    if (c?.t !== 'n' || typeof c.v !== 'number' || typeof c.z !== 'string' || !ssf.is_date(c.z)) continue
+    const serial = Math.floor(c.v) + shift
+    if (serial > 20000 && serial < 80000) c.w = toIso(serial - 25569)
+  }
 }
 
 /**
@@ -66,6 +81,7 @@ export function readXer(text: string): Table {
   })
   const task = tables.get('TASK')
   if (!task) throw new Error('No TASK table in this XER file. Export the project from P6 with activities included.')
+  if (!/^%E\s*$/m.test(text)) throw new Error('This XER file has no %E end marker, so it is cut off. Export the project from P6 again.')
   const baselines = new Set((tables.get('PROJECT')?.rows ?? []).filter(r => r.v.orig_proj_id).map(r => r.v.proj_id))
   const dayHours = new Map((tables.get('CALENDAR')?.rows ?? []).map(r => [r.v.clndr_id, Number(r.v.day_hr_cnt) || 8]))
   const rows: string[][] = [['task_code', 'task_name', 'start', 'finish', 'total_float', 'critical']]
@@ -96,7 +112,7 @@ function sniffDelimiter(text: string): string {
 export function findHeader(t: Table, known: Set<string>): Table {
   for (let r = 0; r < Math.min(t.rows.length, 15); r++) {
     const hits = t.rows[r].filter(h => known.has(norm(h))).length
-    if (hits >= 3) return r === 0 ? t : { rows: t.rows.slice(r), lines: t.lines.slice(r) }
+    if (hits >= 3) return r === 0 ? t : { ...t, rows: t.rows.slice(r), lines: t.lines.slice(r) }
   }
   return t
 }
@@ -131,14 +147,29 @@ export function parseNum(raw: string): number {
   return m ? Number(m[0]) : NaN
 }
 
-/** Lead times arrive as "6 weeks", "30d", "45", "8 wks". Returns calendar days. */
-export function parseLead(raw: string): number {
-  const s = raw.trim().toLowerCase()
-  const n = parseNum(s)
-  if (Number.isNaN(n)) return NaN
-  if (/w/.test(s)) return Math.round(n * 7)
-  if (/mo/.test(s)) return Math.round(n * 30)
-  return Math.round(n)
+const LEAD_UNITS: [RegExp, (n: number) => number][] = [
+  [/^(w(or)?k(ing)?[\s-]?days?|business[\s-]?days?|wd|bd)\b/, n => Math.ceil(n * 7 / 5)], // five a week
+  [/^(w|wks?|weeks?)\b/, n => n * 7],
+  [/^(m|mos?|months?|mths?)\b/, n => n * 30],
+  [/^(d|days?|calendar[\s-]?days?|cal[\s-]?days?|cd)\b/, n => n],
+]
+
+/**
+ * Lead times arrive as "6 weeks", "30d", "45", "10 working days", "6-8 weeks". Returns calendar days, the longer end of a
+ * range. A bare number takes its unit from the column name ("Lead time (weeks)"), else days. Unknown units are NaN.
+ */
+export function parseLead(raw: string, header = ''): number {
+  const s = raw.trim().toLowerCase().replace(/(\d),(\d{3})(?!\d)/g, '$1$2')
+  const unitOf = (u: string) => LEAD_UNITS.find(([re]) => re.test(u))?.[1]
+  const m = s.match(/^[~≈]?\s*(\d+(?:[.,]\d+)?)\s*([^\d(]*?)(?:(?:-|–|—|\bto\b)\s*(\d+(?:[.,]\d+)?)\s*(.*))?$/) ?? s.match(/^[~≈]?\s*(\d+(?:[.,]\d+)?)\s*(.*)$/)
+  if (!m) return NaN
+  const head = header.toLowerCase().split(/[^a-z]+/).filter(Boolean)
+  const columnUnit = head.map((_, i) => unitOf(head.slice(i).join(' '))).find(Boolean) ?? ((x: number) => x)
+  const num = (x: string) => Number(x.replace(',', '.'))
+  const words = (x = '') => x.replace(/^[\s+-]+/, '').replace(/[.,;]+(?=\s|$)/g, '').trim()
+  const days = (n: string, u: string) => { const f = u === '' || u.startsWith('(') ? columnUnit : unitOf(u); return f ? f(num(n)) : NaN }
+  const [a, b] = [words(m[2]), words(m[4])]
+  return Math.round(m[3] === undefined ? days(m[1], a) : Math.max(days(m[1], a || b), days(m[3], b || a)))
 }
 
 /** "Yes", "Yes ($12,500)", "TBD" and "Unknown" count as a potential impact; "No", "N/A" and blank do not. */
@@ -277,12 +308,16 @@ export interface Parsed {
 
 const CLOSED = /\b(closed|void|voided|approved|no exceptions?|reviewed|distributed|complete[d]?|answered|accepted|responded|for record)\b/i
 const REOPEN = /\b(revise|resubmit|rejected|not approved|open|draft|pending|in review|submitted|returned)\b/i
-/** Status words that mean the item is finished. "Approved as noted" closes; "Revise and resubmit" does not. */
+/** A finished word that is denied, partial or still to come: "Not yet approved", "Partially answered", "To be reviewed". */
+const UNFINISHED = /\b(?:not|never|non|partial(?:ly)?|to be|yet to be|pending|awaiting)[\s-]+(?:(?:yet|been|being|fully|formally|all)\s+)*(?:approved|accepted|closed|reviewed|distributed|completed?|answered|responded)\b/gi
+/** Status words that mean the item is finished. "Approved as noted" closes; "Revise and resubmit" and "Not approved" do not. */
 export function isClosedStatus(s: string): boolean {
   const t = s.trim()
   if (!t) return false
   if (/^(yes|true)$/i.test(t)) return true // Procore "Closed?" column
   if (/revise|resubmit|reject/i.test(t)) return false
+  const rest = t.replace(UNFINISHED, ' ')
+  if (rest !== t) return /\b(closed|void|voided)\b/i.test(rest)
   return CLOSED.test(t) && !(REOPEN.test(t) && !/approved|closed/i.test(t))
 }
 
@@ -310,6 +345,10 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
   const dayFirst = sniffDayFirst(t.rows.slice(1).flatMap(rec => dateCols.map(k => get(rec, k))))
   const parseDay = (raw: string) => parseDate(raw, dayFirst)
   if (dayFirst) out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Dates like 13/11/2026 found, so slash dates in this file are read as day/month/year' })
+  // Only a short last row with no line break, under rows that are all full, is taken as cut off: some tools leave empty cells out of every row.
+  const last = t.rows.length - 1
+  const width = t.rows[0]?.length ?? 0
+  const cutOff = !!t.unterminated && last >= 2 && t.rows[last].length < width && t.rows.slice(1, last).every(x => x.length >= width)
   for (let r = 1; r < t.rows.length; r++) {
     const rec = t.rows[r]
     const line = t.lines[r]
@@ -322,6 +361,8 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
       if (Number.isNaN(d)) { warn(`${label} "${raw.slice(0, 30)}" is not a date; ignored`); return undefined }
       return d
     }
+
+    if (cutOff && r === last) { skip('The file ends in the middle of this row; export it again'); continue }
 
     if (kind === 'specs') {
       const section = get(rec, 'section'), title = get(rec, 'title')
@@ -375,8 +416,8 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const closed = date('closed', 'Closed date')
     const revRaw = get(rec, 'revision')
     const revision = Math.max(0, Number.isNaN(parseNum(revRaw)) ? 0 : Math.round(parseNum(revRaw)))
-    const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead')) : NaN
-    if (get(rec, 'lead') && Number.isNaN(lead)) warn(`Lead time "${get(rec, 'lead')}" is not a number; the project default is used`)
+    const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead'), t.rows[0][map.lead]) : NaN
+    if (get(rec, 'lead') && Number.isNaN(lead)) warn(`Lead time "${get(rec, 'lead')}" is not a lead time; the project default is used`)
     const cv = parseNum(get(rec, 'costValue'))
     const item: Item = {
       key: `${k}:${number}`, kind: k, number, title: title || '(untitled)', status: status || (closed !== undefined ? 'Closed' : 'Open'),
@@ -392,7 +433,11 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     if (item.closed !== undefined && item.closed < created) { warn('Closed before it was created; closed date ignored'); item.closed = undefined }
     if (item.responded !== undefined && item.responded < created) { warn('Responded before it was created; response date ignored'); item.responded = undefined }
     if (item.open && item.closed === undefined && !item.bic) warn('Open item has no ball in court; it is counted against the reviewer')
-    if (!item.open && item.closed === undefined) item.closed = item.responded ?? item.due ?? created
+    // A close date is never made up from the due or created date: unknown stays unknown.
+    if (!item.open && item.closed === undefined) {
+      item.closed = item.responded
+      if (item.closed === undefined) warn('Closed with no close or response date; left out of ages and turnaround')
+    }
     // Procore lists each submittal revision as its own row; keep the latest revision per number.
     const prev = seen.get(item.key)
     if (prev !== undefined) {

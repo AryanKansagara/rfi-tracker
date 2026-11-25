@@ -4,7 +4,7 @@ import { delayCsv, delayLog, registerCsv, registerRows, REGISTER_HEADERS, remind
 import { compare, guessRole, resubmittalLoops, type Change } from './engine/analyze.ts'
 import { toIso } from './engine/calendar.ts'
 import { ROLES, type Config, type Dataset, type Role } from './engine/types.ts'
-import { itemLabel, ItemDetail, saveSnapshot } from './Project.tsx'
+import { ageKnown, itemLabel, ItemDetail, saveSnapshot } from './Project.tsx'
 import type { Analysis } from './projectData.ts'
 import { getDefaults, type Project } from './store.ts'
 import { deleteSnapshotCloud } from './sync.ts'
@@ -97,7 +97,7 @@ function Schedule({ project, a, ds, setConfig }: Props) {
           {loops.length === 0 ? <p className="muted">No submittal has needed a resubmittal.</p> : (
             <table className="compact">
               <thead><tr><th>Submittal</th><th className="num">Revisions</th><th>With</th><th className="num">Age</th></tr></thead>
-              <tbody>{loops.map(s => <tr key={s.item.key} className={s.item.revision >= 2 ? 'is-late' : ''}><th scope="row" className="break">{s.item.number} <small className="muted">{s.item.title}</small></th><td className="num strong">{s.item.revision}</td><td>{s.holder ? <><RoleDot role={s.holder.role} /> {s.holder.firm}</> : 'Closed'}</td><td className="num">{s.age}</td></tr>)}</tbody>
+              <tbody>{loops.map(s => <tr key={s.item.key} className={s.item.revision >= 2 ? 'is-late' : ''}><th scope="row" className="break">{s.item.number} <small className="muted">{s.item.title}</small></th><td className="num strong">{s.item.revision}</td><td>{s.holder ? <><RoleDot role={s.holder.role} /> {s.holder.firm}</> : 'Closed'}</td><td className="num">{ageKnown(s) ? s.age : '—'}</td></tr>)}</tbody>
             </table>
           )}
           <p className="muted small">Each revision costs a full review cycle. Two or more usually means the requirements were not clear at the first submission.</p>
