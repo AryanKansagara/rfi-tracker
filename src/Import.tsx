@@ -108,7 +108,7 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
     const r = region.trim().toUpperCase(), country = r.split('-')[0]
     if (!/^[A-Z]{2}$/.test(country)) { toast('Use a two-letter country code, optionally with a region: GB-ENG, CA-ON.', { tone: 'error' }); return }
     try {
-      const y = new Date().getUTCFullYear()
+      const y = new Date().getFullYear()
       const lists = await Promise.all([y - 1, y, y + 1].map(async yr => {
         const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${yr}/${country}`)
         if (!res.ok) throw new Error(res.status === 404 ? `No holiday data for ${country}` : `Holiday service returned ${res.status}`)
@@ -162,7 +162,7 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
           }} />
         </label>
         <div className="row gap wrap" style={{ alignItems: 'flex-end' }}>
-          <button type="button" className="btn ghost sm" onClick={() => { const y = new Date().getUTCFullYear(); setConfig({ holidays: [y - 1, y, y + 1].flatMap(constructionHolidays) }); toast('Reset to the US construction holidays', { tone: 'ok' }) }}>Reset to US construction holidays</button>
+          <button type="button" className="btn ghost sm" onClick={() => { const y = new Date().getFullYear(); setConfig({ holidays: [y - 1, y, y + 1].flatMap(constructionHolidays) }); toast('Reset to the US construction holidays', { tone: 'ok' }) }}>Reset to US construction holidays</button>
           <form className="row gap-sm" style={{ alignItems: 'flex-end' }} onSubmit={e => { e.preventDefault(); void loadPublic(String(new FormData(e.currentTarget).get('region'))) }}>
             <label className="field" style={{ margin: 0 }}><span>Or public holidays for</span>
               <input name="region" list="regions" defaultValue="GB-ENG" size={8} aria-describedby="region-hint" />
