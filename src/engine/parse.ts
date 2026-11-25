@@ -54,13 +54,14 @@ export function decodeText(buf: ArrayBuffer | Uint8Array): string {
 
 interface Cell { t?: string; v?: unknown; z?: unknown; w?: string }
 interface Book { Sheets: Record<string, object>; Workbook?: { WBProps?: { date1904?: boolean } } }
-/** Excel dates are day counts shown in any format ("03/10/2026", "Oct-26"), so their text is replaced by the ISO date. `ssf` is SheetJS's number-format module. */
-export function dateCellsToIso(wb: Book, ssf: { is_date(fmt: string): boolean }) {
+/** Excel dates are day counts shown in any format ("03/10/2026", "Oct-26"), so their text is replaced by the ISO date. `ssf` is SheetJS's number-format module; `times` keeps a time of day after the date. */
+export function dateCellsToIso(wb: Book, ssf: { is_date(fmt: string): boolean }, times = false) {
   const shift = wb.Workbook?.WBProps?.date1904 ? 1462 : 0
   for (const sheet of Object.values(wb.Sheets)) for (const c of Object.values(sheet) as Cell[]) {
     if (c?.t !== 'n' || typeof c.v !== 'number' || typeof c.z !== 'string' || !ssf.is_date(c.z)) continue
     const serial = Math.floor(c.v) + shift
-    if (serial > 20000 && serial < 80000) c.w = toIso(serial - 25569)
+    const secs = Math.min(86_399, Math.round((c.v % 1) * 86_400))
+    if (serial > 20000 && serial < 80000) c.w = toIso(serial - 25569) + (times && secs > 0 ? ' ' + new Date(secs * 1000).toISOString().slice(11, 19) : '')
   }
 }
 
@@ -133,6 +134,17 @@ export function parseDate(raw: string, dayFirst = false): Day {
   if (m && MONTHS.includes(m[1].toLowerCase())) return valid(+m[3], MONTHS.indexOf(m[1].toLowerCase()) + 1, +m[2])
   if (/^\d{5}(\.\d+)?$/.test(s)) { const n = Math.floor(Number(s)); if (n > 20000 && n < 80000) return n - 25569 } // Excel serial
   return NaN
+}
+/** Time of day in a timestamp, in seconds: "2026-10-06 15:00", "10/6/2026 3:00 PM", "2026-10-06T15:00:00Z", or an Excel serial's fraction. Undefined when there is none. */
+export function parseTime(raw: string): number | undefined {
+  const serial = raw.trim().match(/^\d{5}(\.\d+)$/)
+  if (serial) return Math.round(Number(serial[1]) * 86_400)
+  const t = raw.match(/[\sT,](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(?:([ap])\.?m\b)?/i)
+  if (!t) return undefined
+  const ap = t[4]?.toLowerCase()
+  const [h, mi, sec] = [+t[1], +(t[2] ?? 0), +(t[3] ?? 0)]
+  if (mi > 59 || sec > 59 || (ap ? h < 1 || h > 12 : h > 23)) return undefined
+  return ((ap ? h % 12 + (ap === 'p' ? 12 : 0) : h) * 60 + mi) * 60 + sec
 }
 function valid(y: number, mo: number, d: number): Day {
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < 1990 || y > 2100) return NaN
@@ -452,7 +464,7 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
       if (!bic && !get(rec, 'status')) { skip('Neither ball in court nor status is given'); continue }
       const tk = get(rec, 'type')
       const k: Kind | undefined = /sub/i.test(tk) ? 'submittal' : /rfi/i.test(tk) ? 'rfi' : undefined
-      out.history.push({ key: k ? `${k}:${number}` : number, number, kind: k, event: { at, bic, status: get(rec, 'status') || undefined } })
+      out.history.push({ key: k ? `${k}:${number}` : number, number, kind: k, event: { at, bic, status: get(rec, 'status') || undefined, time: parseTime(get(rec, 'date')) } })
       continue
     }
 
@@ -515,7 +527,32 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     seen.set(item.key, out.items.length)
     out.items.push(item)
   }
+  if (newestFirst(out.history)) out.history.reverse()
   return out
+}
+
+/** Whether a history file runs backwards: judged within items, or across the file when no item has two different dates. */
+function newestFirst(hist: Parsed['history']): boolean {
+  const score = (evs: HistoryEvent[]) => evs.slice(1).reduce((n, e, i) => {
+    const p = evs[i]
+    return n + Math.sign(e.at - p.at || (e.time !== undefined && p.time !== undefined ? e.time - p.time : 0))
+  }, 0)
+  const byItem = new Map<string, HistoryEvent[]>()
+  for (const h of hist) byItem.set(h.key, [...(byItem.get(h.key) ?? []), h.event])
+  const within = [...byItem.values()].map(score)
+  return (within.some(Boolean) ? within.reduce((a, b) => a + b, 0) : score(hist.map(h => h.event))) < 0
+}
+
+/** Sorts by day, and within a day by time. Events without a time keep their place among the others of that day. */
+function inOrder(events: HistoryEvent[]): HistoryEvent[] {
+  const days = new Map<Day, HistoryEvent[]>()
+  for (const e of events) days.set(e.at, [...(days.get(e.at) ?? []), e])
+  return [...days.entries()].sort((a, b) => a[0] - b[0]).flatMap(([, evs]) => {
+    // Imported again with times: the copy stored without one gives way.
+    const kept = evs.filter(e => e.time !== undefined || !evs.some(x => x.time !== undefined && x.bic === e.bic && x.status === e.status))
+    const timed = kept.filter(e => e.time !== undefined).sort((a, b) => a.time! - b.time!)
+    return kept.map(e => e.time === undefined ? e : timed.shift()!)
+  })
 }
 
 /** Attaches imported history to items (by key, or by number when the history file has no type column). Events are sorted and de-duplicated. */
@@ -533,7 +570,7 @@ export function attachHistory(items: Item[], hist: Parsed['history']): { items: 
   const out = items.map(i => {
     const ev = add.get(i.key)
     if (!ev) return i
-    const all = [...(i.history ?? []), ...ev].sort((a, b) => a.at - b.at)
+    const all = inOrder([...(i.history ?? []), ...ev])
     const dedup = all.filter((e, n) => n === 0 || e.at !== all[n - 1].at || e.bic !== all[n - 1].bic)
     return { ...i, history: dedup }
   })

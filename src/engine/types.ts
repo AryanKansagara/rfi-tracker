@@ -9,7 +9,7 @@ export const REVIEWERS: Role[] = ['Architect', 'Engineer', 'Owner']
 export type Kind = 'rfi' | 'submittal'
 
 /** One hand-off: from this day the ball was with this firm. */
-export interface HistoryEvent { at: Day; bic: string; status?: string }
+export interface HistoryEvent { at: Day; bic: string; status?: string; time?: number /* seconds into the day, when the file gives a time */ }
 
 export interface Item {
   key: string            // kind:number, unique within a project

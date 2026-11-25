@@ -22,7 +22,7 @@ const TEMPLATES: Record<string, string> = {
 async function readXlsx(f: File): Promise<Table> {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await f.arrayBuffer(), { cellDates: false, cellNF: true })
-  dateCellsToIso(wb, XLSX.SSF)
+  dateCellsToIso(wb, XLSX.SSF, true)
   let best: Table | null = null
   for (const n of wb.SheetNames) {
     const t = findHeaderRow(parseCsv(XLSX.utils.sheet_to_csv(wb.Sheets[n], { blankrows: false })))
