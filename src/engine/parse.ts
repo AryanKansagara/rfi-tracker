@@ -228,10 +228,11 @@ export function parseRevision(raw: string): number {
 /** "Yes", "Yes ($12,500)", "TBD" and "Unknown" count as a potential impact; "No", "N/A" and blank do not. */
 export const isImpact = (raw: string) => /^(y|yes|true|tbd|unknown|possible|1)\b/i.test(raw.trim())
 
+/** Text that a spreadsheet would run as a formula (it starts with = + - @, a tab or a CR) gets an apostrophe in front; numbers stay numbers. */
 export function toCsv(rows: (string | number)[][]): string {
   return rows.map(r => r.map(v => {
-    const s = typeof v === 'number' ? String(Math.round(v * 100) / 100) : v
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    const s = typeof v === 'number' ? String(Math.round(v * 100) / 100) : /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }).join(',')).join('\n') + '\n'
 }
 
