@@ -464,7 +464,12 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     const created = parseDay(createdRaw)
     if (Number.isNaN(created)) { skip(`Created date "${createdRaw.slice(0, 30)}" is not a date`); continue }
     const tk = get(rec, 'type')
-    const k: Kind = /sub|shop|product data|sample|mock/i.test(tk) ? 'submittal' : /rfi|request/i.test(tk) ? 'rfi' : itemKind ?? FORMATS[format].itemKind ?? ('spec' in map || 'revision' in map ? 'submittal' : 'rfi')
+    const subType = /sub|shop|product data|sample|mock/i.test(tk)
+    // In an RFI log, types such as "Substitution request" or "Subcontractor question" are kinds of RFI.
+    const rfiLog = FORMATS[format].itemKind === 'rfi'
+    const saysSubmittal = /\bsubmittals?\b/i.test(tk) && !/\brfis?\b|request|question|quer(y|ies)|clarif/i.test(tk)
+    if (rfiLog && subType && !saysSubmittal && !/\brfis?\b|request|question|quer(y|ies)|clarif|substitut|subcontract/i.test(tk)) warn(`Type "${tk}" in an RFI log; imported as an RFI. If this is a submittal log, choose that format above`)
+    const k: Kind = (rfiLog ? saysSubmittal : subType) ? 'submittal' : /rfi|request/i.test(tk) ? 'rfi' : itemKind ?? FORMATS[format].itemKind ?? ('spec' in map || 'revision' in map ? 'submittal' : 'rfi')
     // With no status column, words in a "Closed" column of dates ("No", "Void") are the status.
     const closedRaw = get(rec, 'closed')
     const closedWord = !('status' in map) && /^\D*[a-z]\D*$/i.test(closedRaw) && norm(t.rows[0][map.closed] ?? '') === 'closed'
