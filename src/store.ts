@@ -147,7 +147,7 @@ export const setDefaults = (d: Defaults) => localStorage.setItem(DEF_KEY, JSON.s
 
 export function blankConfig(): Config {
   const d = getDefaults()
-  const y = new Date().getUTCFullYear()
+  const y = new Date().getFullYear()
   return { gcName: d.gcName, firms: d.gcName ? { [d.gcName]: 'GC' } : {}, reviewDays: { ...d.reviewDays }, holidays: [y - 1, y, y + 1].flatMap(constructionHolidays), reviewCycles: d.reviewCycles, defaultLeadDays: d.defaultLeadDays, riskFloat: d.riskFloat, links: {} }
 }
 export const emptyDataset = (): Dataset => ({ items: [], activities: [], specs: [] })

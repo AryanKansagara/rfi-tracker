@@ -5,7 +5,8 @@ export const dayOf = (y: number, m: number, d: number): Day => Math.floor(Date.U
 export const toIso = (d: Day) => new Date(d * MS).toISOString().slice(0, 10)
 export const fromIso = (s: string): Day => dayOf(+s.slice(0, 4), +s.slice(5, 7), +s.slice(8, 10))
 export const weekday = (d: Day) => (d + 4) % 7 // 1970-01-01 was a Thursday; 0 = Sunday
-export const todayDay = (): Day => Math.floor(Date.now() / MS)
+/** The calendar date in the browser's time zone. */
+export const todayDay = (now = new Date()): Day => dayOf(now.getFullYear(), now.getMonth() + 1, now.getDate())
 
 const nthWeekday = (y: number, m: number, wd: number, n: number) => {
   const first = dayOf(y, m, 1)

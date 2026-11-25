@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { todayDay, toIso } from './engine/calendar.ts'
 import { ROLES } from './engine/types.ts'
 import { deleteProject, getDefaults, getProjects, setDefaults, type Defaults } from './store.ts'
 import { exportAll, RAW_SYNC_LIMIT, useSync } from './sync.ts'
@@ -43,7 +44,7 @@ export default function Settings() {
         <h2>Your data</h2>
         <p>Projects live in this browser (IndexedDB). {sync.user ? <>Signed in as <b>{sync.user.email}</b>: firm roles, review periods, links, snapshots and logs under {(RAW_SYNC_LIMIT / 1e6).toFixed(1)} MB per project sync to your account.</> : 'Sign in from the account menu (top right) to sync across devices. It is optional.'}</p>
         <div className="row gap wrap">
-          <button type="button" className="btn ghost" onClick={async () => download(`ball-in-court-export-${new Date().toISOString().slice(0, 10)}.json`, await exportAll())}>Export all my data (JSON)</button>
+          <button type="button" className="btn ghost" onClick={async () => download(`ball-in-court-export-${toIso(todayDay())}.json`, await exportAll())}>Export all my data (JSON)</button>
           <button type="button" className="btn danger-ghost" onClick={async () => {
             const list = getProjects()
             if (!list.length) { toast('Nothing to delete'); return }
