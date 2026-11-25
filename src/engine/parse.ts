@@ -217,7 +217,7 @@ export const FIELDS: Record<FileKind, FieldSpec[]> = {
     { key: 'due', label: 'Due date', aliases: ['due_date', 'final_due_date', 'due', 'response_due', 'required_by'] },
     { key: 'sent', label: 'Sent to reviewer / submitted', aliases: ['submitted_on', 'sent_date', 'submitted_date', 'date_submitted', 'sent_on', 'received_date', 'submitted'] },
     { key: 'responded', label: 'Responded / returned', aliases: ['responded_on', 'response_date', 'latest_assignee_response_date', 'returned_date', 'returned_on', 'answered_on', 'date_returned', 'reviewed_on'] },
-    { key: 'closed', label: 'Closed', aliases: ['closed_on', 'closed_date', 'date_closed', 'closed_at', 'distributed_on', 'distributed_date'] },
+    { key: 'closed', label: 'Closed', aliases: ['closed_on', 'closed_date', 'date_closed', 'closed_at', 'distributed_on', 'distributed_date', 'closed'] },
     { key: 'requiredOnSite', label: 'Required on site', aliases: ['required_on_job_date', 'required_on_site_date', 'required_on_site', 'on_site_date', 'required_onsite'] },
     { key: 'lead', label: 'Lead time', aliases: ['lead_time', 'lead_time_days', 'lead_days', 'lead_time_weeks', 'fabrication_lead_time'] },
     { key: 'revision', label: 'Revision', aliases: ['revision', 'rev', 'rev_no', 'revision_number'] },
@@ -270,13 +270,17 @@ export function detectFormat(headers: string[]): Format {
 
 export type Mapping = Record<string, number>
 
-export function autoMap(headers: string[], kind: FileKind): Mapping {
+/** A column headed only "Closed" is the close date when it holds dates (pass `rows`, header first), else a status (Procore "Closed?" Yes/No). */
+export function autoMap(headers: string[], kind: FileKind, rows: string[][] = []): Mapping {
   const hs = headers.map(norm)
+  const closedCol = hs.indexOf('closed')
+  const closedIs = rows.slice(1).some(r => !Number.isNaN(parseDate(r[closedCol] ?? '')) || !Number.isNaN(parseDate(r[closedCol] ?? '', true))) ? 'closed' : 'status'
   const map: Mapping = {}
   const used = new Set<number>()
   for (const f of FIELDS[kind]) {
     for (const a of f.aliases) {
       const i = hs.indexOf(a)
+      if (kind === 'items' && a === 'closed' && f.key !== closedIs) continue
       if (i >= 0 && !used.has(i)) { map[f.key] = i; used.add(i); break }
     }
   }
@@ -411,9 +415,12 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     if (Number.isNaN(created)) { skip(`Created date "${createdRaw.slice(0, 30)}" is not a date`); continue }
     const tk = get(rec, 'type')
     const k: Kind = /sub|shop|product data|sample|mock/i.test(tk) ? 'submittal' : /rfi|request/i.test(tk) ? 'rfi' : itemKind ?? FORMATS[format].itemKind ?? ('spec' in map || 'revision' in map ? 'submittal' : 'rfi')
-    const statusRaw = get(rec, 'status')
+    // With no status column, words in a "Closed" column of dates ("No", "Void") are the status.
+    const closedRaw = get(rec, 'closed')
+    const closedWord = !('status' in map) && /^\D*[a-z]\D*$/i.test(closedRaw) && norm(t.rows[0][map.closed] ?? '') === 'closed'
+    const statusRaw = closedWord ? closedRaw : get(rec, 'status')
     const status = /^(yes|true)$/i.test(statusRaw) ? 'Closed' : /^(no|false)$/i.test(statusRaw) ? 'Open' : statusRaw
-    const closed = date('closed', 'Closed date')
+    const closed = closedWord ? undefined : date('closed', 'Closed date')
     const revRaw = get(rec, 'revision')
     const revision = Math.max(0, Number.isNaN(parseNum(revRaw)) ? 0 : Math.round(parseNum(revRaw)))
     const lead = get(rec, 'lead') ? parseLead(get(rec, 'lead'), t.rows[0][map.lead]) : NaN

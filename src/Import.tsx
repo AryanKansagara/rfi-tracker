@@ -61,7 +61,7 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
         const table = /\.xls[xm]?$/i.test(f.name) ? await readXlsx(f) : /\.xer$/i.test(f.name) ? readXer(decodeText(await f.arrayBuffer())) : findHeaderRow(parseCsv(decodeText(await f.arrayBuffer())))
         if (table.rows.length < 2) { toast(`${f.name} has no data rows.`, { tone: 'error' }); continue }
         const format = detectFormat(table.rows[0])
-        next.push({ id: uuid(), name: f.name, format, table, map: autoMap(table.rows[0], FORMATS[format].kind), itemKind: FORMATS[format].itemKind ?? (/submittal/i.test(f.name) ? 'submittal' : /rfi/i.test(f.name) ? 'rfi' : undefined) })
+        next.push({ id: uuid(), name: f.name, format, table, map: autoMap(table.rows[0], FORMATS[format].kind, table.rows), itemKind: FORMATS[format].itemKind ?? (/submittal/i.test(f.name) ? 'submittal' : /rfi/i.test(f.name) ? 'rfi' : undefined) })
       } catch (e) { toast(`${f.name}: ${e instanceof Error ? e.message : 'could not be read'}`, { tone: 'error' }) }
     }
     setPending(p => [...p, ...next])
@@ -210,7 +210,7 @@ function PendingFile({ p, onChange, onCancel, onCommit }: { p: Pending; onChange
         <h2 className="break">{p.name}</h2>
         <div className="row gap-sm wrap">
           <label className="row gap-sm small">Detected as
-            <select value={p.format} style={{ width: 'auto' }} onChange={e => { const f = e.target.value as Format; onChange({ ...p, format: f, map: autoMap(headers, FORMATS[f].kind), itemKind: FORMATS[f].itemKind ?? p.itemKind }) }}>
+            <select value={p.format} style={{ width: 'auto' }} onChange={e => { const f = e.target.value as Format; onChange({ ...p, format: f, map: autoMap(headers, FORMATS[f].kind, p.table.rows), itemKind: FORMATS[f].itemKind ?? p.itemKind }) }}>
               {(Object.keys(FORMATS) as Format[]).map(f => <option key={f} value={f}>{FORMATS[f].label}</option>)}
             </select>
           </label>
