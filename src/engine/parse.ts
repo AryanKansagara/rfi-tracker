@@ -304,15 +304,19 @@ export function autoMap(headers: string[], kind: FileKind, rows: string[][] = []
  * Autodesk Build and Procore export dates in the account's locale, so a UK, Canadian or Australian log says 13/11/2026.
  * A file is day-first when some slash date only makes sense that way (first part over 12) and none only makes sense US-style.
  */
-export function sniffDayFirst(values: string[]): boolean {
-  let dm = false, md = false
+export const sniffDayFirst = (values: string[]) => sniffSlashOrder(values) === 'dmy'
+
+/** What the slash dates say about their order: 'either' when all fit both (and some would differ), 'mixed' when some fit only one and some only the other. */
+export function sniffSlashOrder(values: string[]): 'dmy' | 'mdy' | 'mixed' | 'either' | 'none' {
+  let dm = false, md = false, both = false
   for (const v of values) {
     const m = v.trim().match(/^(?:[a-z]{3}[a-z]*\.?,?\s+)?(\d{1,2})\/(\d{1,2})\/\d{2,4}\b/i)
     if (!m) continue
     if (+m[1] > 12 && +m[2] <= 12) dm = true
     if (+m[2] > 12 && +m[1] <= 12) md = true
+    if (+m[1] <= 12 && +m[2] <= 12 && +m[1] !== +m[2]) both = true
   }
-  return dm && !md
+  return dm && md ? 'mixed' : dm ? 'dmy' : md ? 'mdy' : both ? 'either' : 'none'
 }
 
 // ---------- Validation ----------
@@ -359,9 +363,12 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
   const get = (rec: string[], k: string) => map[k] === undefined ? '' : (rec[map[k]] ?? '').trim()
   const seen = new Map<string, number>()
   const dateCols = ['created', 'due', 'sent', 'responded', 'closed', 'requiredOnSite', 'date', 'start', 'finish'].filter(k => k in map)
-  const dayFirst = sniffDayFirst(t.rows.slice(1).flatMap(rec => dateCols.map(k => get(rec, k))))
+  const order = sniffSlashOrder(t.rows.slice(1).flatMap(rec => dateCols.map(k => get(rec, k))))
+  const dayFirst = order === 'dmy'
   const parseDay = (raw: string) => parseDate(raw, dayFirst)
   if (dayFirst) out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Dates like 13/11/2026 found, so slash dates in this file are read as day/month/year' })
+  if (order === 'either') out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Every slash date in this file fits both month/day and day/month; read as month/day/year. If that is wrong, export with dates like 2026-10-05' })
+  if (order === 'mixed') out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Some slash dates in this file fit only day/month and some only month/day; read as month/day/year, so check the dates' })
   // Only a short last row with no line break, under rows that are all full, is taken as cut off: some tools leave empty cells out of every row.
   const last = t.rows.length - 1
   const width = t.rows[0]?.length ?? 0
