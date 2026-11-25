@@ -140,6 +140,26 @@ function valid(y: number, mo: number, d: number): Day {
   return toIso(day) === `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` ? day : NaN
 }
 
+const TIME = String.raw`(?:[T ]\s*\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:[ap]m\b|Z\b|[+-]\d{2}:?\d{2}\b)?)?`
+const DATE_IN_LIST = new RegExp(String.raw`(?<![\w/.-])(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})|\d{1,2}[-\s][a-z]{3,9}[-\s,]+(?:\d{4}|\d{2})|[a-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{5})${TIME}(?![\w/-]|\.\d)`, 'gi')
+
+/** Dates typed as a list, one per line or separated by commas, semicolons or spaces, in the formats `parseDate` reads. Whatever is not a date is returned in `bad`. */
+export function parseDayList(text: string): { days: Day[]; bad: string[]; order: ReturnType<typeof sniffSlashOrder> } {
+  const found: string[] = []
+  const bad: string[] = []
+  for (const line of text.split(/[\r\n]+/)) {
+    const rest = line.replace(DATE_IN_LIST, m => { found.push(m); return '\n' })
+    bad.push(...rest.split(/[\n,;]+/).map(x => x.trim()).filter(Boolean))
+  }
+  const order = sniffSlashOrder(found)
+  const days: Day[] = []
+  for (const f of found) {
+    const d = parseDate(f, order === 'dmy')
+    if (Number.isNaN(d)) bad.push(f.trim()); else days.push(d)
+  }
+  return { days: [...new Set(days)].sort((a, b) => a - b), bad, order }
+}
+
 export function parseNum(raw: string): number {
   const s = raw.trim().replace(/[,\s$]/g, '').replace(/^\((.*)\)$/, '-$1')
   if (s === '' || /^null$/i.test(s)) return NaN
