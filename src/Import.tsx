@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { asOfDay, itemStates, snapshot } from './engine/analyze.ts'
-import { constructionHolidays, fromIso, holidaysForRegion, toIso, type PublicHoliday } from './engine/calendar.ts'
-import { attachHistory, autoMap, dateCellsToIso, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
+import { constructionHolidays, holidaysForRegion, toIso, type PublicHoliday } from './engine/calendar.ts'
+import { attachHistory, autoMap, dateCellsToIso, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseDayList, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
 import type { Config, Dataset, Kind } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { getData, getProject, putData, saveProject, uuid, type Project } from './store.ts'
@@ -154,8 +154,11 @@ export default function DataTab({ project, ds, update, setConfig }: { project: P
         <p className="muted small">Contract review periods per party and firm roles are on the <Link href={`/app/p/${project.id}/parties`}>Parties</Link> tab.</p>
         <label className="field"><span>Holidays (one date per line, excluded from working days)</span>
           <textarea rows={4} defaultValue={holidays} key={holidays} onBlur={e => {
-            const days = e.target.value.split(/[\s,]+/).filter(Boolean).map(s => fromIso(s)).filter(d => Number.isFinite(d))
-            setConfig({ holidays: [...new Set(days)].sort((x, y) => x - y) })
+            const { days, bad, order } = parseDayList(e.target.value)
+            e.target.value = days.map(toIso).join('\n')
+            if (bad.length) toast(`Not added to the holidays, because not a date: ${bad.slice(0, 8).join('; ')}${bad.length > 8 ? ` and ${bad.length - 8} more` : ''}. Use dates like 2026-12-25.`, { tone: 'error' })
+            if (order === 'either' || order === 'mixed') toast('Holidays with slashes were read as month/day/year; check the list.')
+            setConfig({ holidays: days })
           }} />
         </label>
         <div className="row gap wrap" style={{ alignItems: 'flex-end' }}>
