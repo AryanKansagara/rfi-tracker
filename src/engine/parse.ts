@@ -3,7 +3,8 @@ import type { Activity, Day, HistoryEvent, Item, Kind, SpecSection } from './typ
 
 // ---------- CSV ----------
 
-export interface Table { rows: string[][]; lines: number[] }
+/** `unterminated`: the file does not end with a line break, so its last row may have been cut off. */
+export interface Table { rows: string[][]; lines: number[]; unterminated?: boolean }
 
 export function parseCsv(text: string): Table {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
@@ -13,6 +14,7 @@ export function parseCsv(text: string): Table {
   let row: string[] = []
   let field = ''
   let quoted = false
+  let quoteLine = 1
   let line = 1
   let rowLine = 1
   for (let i = 0; i < text.length; i++) {
@@ -26,7 +28,7 @@ export function parseCsv(text: string): Table {
       }
       continue
     }
-    if (c === '"' && field === '') quoted = true
+    if (c === '"' && field === '') { quoted = true; quoteLine = line }
     else if (c === delim) { row.push(field); field = '' }
     else if (c === '\n' || c === '\r') {
       if (c === '\r' && text[i + 1] === '\n') i++
@@ -37,9 +39,10 @@ export function parseCsv(text: string): Table {
       rowLine = line
     } else field += c
   }
+  if (quoted) throw new Error(`A quoted value opened on line ${quoteLine} is never closed, so the rows after it cannot be read. The file is cut off or a quote is missing; export it again.`)
   if (field !== '' || row.length) {
     row.push(field)
-    if (row.some(v => v.trim() !== '')) { rows.push(row); lines.push(rowLine) }
+    if (row.some(v => v.trim() !== '')) { rows.push(row); lines.push(rowLine); return { rows, lines, unterminated: true } }
   }
   return { rows, lines }
 }
@@ -66,6 +69,7 @@ export function readXer(text: string): Table {
   })
   const task = tables.get('TASK')
   if (!task) throw new Error('No TASK table in this XER file. Export the project from P6 with activities included.')
+  if (!/^%E\s*$/m.test(text)) throw new Error('This XER file has no %E end marker, so it is cut off. Export the project from P6 again.')
   const baselines = new Set((tables.get('PROJECT')?.rows ?? []).filter(r => r.v.orig_proj_id).map(r => r.v.proj_id))
   const dayHours = new Map((tables.get('CALENDAR')?.rows ?? []).map(r => [r.v.clndr_id, Number(r.v.day_hr_cnt) || 8]))
   const rows: string[][] = [['task_code', 'task_name', 'start', 'finish', 'total_float', 'critical']]
@@ -96,7 +100,7 @@ function sniffDelimiter(text: string): string {
 export function findHeader(t: Table, known: Set<string>): Table {
   for (let r = 0; r < Math.min(t.rows.length, 15); r++) {
     const hits = t.rows[r].filter(h => known.has(norm(h))).length
-    if (hits >= 3) return r === 0 ? t : { rows: t.rows.slice(r), lines: t.lines.slice(r) }
+    if (hits >= 3) return r === 0 ? t : { ...t, rows: t.rows.slice(r), lines: t.lines.slice(r) }
   }
   return t
 }
@@ -310,6 +314,10 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
   const dayFirst = sniffDayFirst(t.rows.slice(1).flatMap(rec => dateCols.map(k => get(rec, k))))
   const parseDay = (raw: string) => parseDate(raw, dayFirst)
   if (dayFirst) out.issues.push({ line: t.lines[0] ?? 1, level: 'warning', message: 'Dates like 13/11/2026 found, so slash dates in this file are read as day/month/year' })
+  // Only a short last row with no line break, under rows that are all full, is taken as cut off: some tools leave empty cells out of every row.
+  const last = t.rows.length - 1
+  const width = t.rows[0]?.length ?? 0
+  const cutOff = !!t.unterminated && last >= 2 && t.rows[last].length < width && t.rows.slice(1, last).every(x => x.length >= width)
   for (let r = 1; r < t.rows.length; r++) {
     const rec = t.rows[r]
     const line = t.lines[r]
@@ -322,6 +330,8 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
       if (Number.isNaN(d)) { warn(`${label} "${raw.slice(0, 30)}" is not a date; ignored`); return undefined }
       return d
     }
+
+    if (cutOff && r === last) { skip('The file ends in the middle of this row; export it again'); continue }
 
     if (kind === 'specs') {
       const section = get(rec, 'section'), title = get(rec, 'title')
