@@ -32,6 +32,7 @@ npm install
 npm run dev      # http://localhost:4364
 npm test         # engine tests
 npm run build
+npm run test:e2e # Playwright on the production build; E2E_PORT picks the port (default 27954)
 ```
 Optional sync: copy `.env.example` to `.env` with a Supabase URL and publishable key.
 
