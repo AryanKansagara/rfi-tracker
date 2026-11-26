@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { asOfDay, itemStates, snapshot } from './engine/analyze.ts'
 import { constructionHolidays, fromIso, holidaysForRegion, toIso, type PublicHoliday } from './engine/calendar.ts'
-import { attachHistory, autoMap, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
+import { attachHistory, autoMap, dateCellsToIso, decodeText, detectFormat, FIELDS, findHeaderRow, FORMATS, mergeItems, parseCsv, parseTable, readXer, type Format, type Mapping, type Table } from './engine/parse.ts'
 import type { Config, Dataset, Kind } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { putData, saveProject, uuid, type Project } from './store.ts'
@@ -21,7 +21,8 @@ const TEMPLATES: Record<string, string> = {
 /** Workbooks: the first sheet whose header row we recognise, else the first sheet. */
 async function readXlsx(f: File): Promise<Table> {
   const XLSX = await import('xlsx')
-  const wb = XLSX.read(await f.arrayBuffer(), { cellDates: false })
+  const wb = XLSX.read(await f.arrayBuffer(), { cellDates: false, cellNF: true })
+  dateCellsToIso(wb, XLSX.SSF)
   let best: Table | null = null
   for (const n of wb.SheetNames) {
     const t = findHeaderRow(parseCsv(XLSX.utils.sheet_to_csv(wb.Sheets[n], { blankrows: false })))
