@@ -392,7 +392,11 @@ export function parseTable(t: Table, map: Mapping, format: Format, itemKind?: Ki
     if (item.closed !== undefined && item.closed < created) { warn('Closed before it was created; closed date ignored'); item.closed = undefined }
     if (item.responded !== undefined && item.responded < created) { warn('Responded before it was created; response date ignored'); item.responded = undefined }
     if (item.open && item.closed === undefined && !item.bic) warn('Open item has no ball in court; it is counted against the reviewer')
-    if (!item.open && item.closed === undefined) item.closed = item.responded ?? item.due ?? created
+    // A close date is never made up from the due or created date: unknown stays unknown.
+    if (!item.open && item.closed === undefined) {
+      item.closed = item.responded
+      if (item.closed === undefined) warn('Closed with no close or response date; left out of ages and turnaround')
+    }
     // Procore lists each submittal revision as its own row; keep the latest revision per number.
     const prev = seen.get(item.key)
     if (prev !== undefined) {
